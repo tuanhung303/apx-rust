@@ -343,11 +343,10 @@ Gate:
 This path is the interim surface until Phase 6 lands: it pays a per-call
 process boundary and is superseded by the in-process freeform extension.
 
-Status (iter7, 2026-08-01): accuracy parity 60/66 across seven arms; desc v4
-at 687 chars with a worked example removed the discovery phase; `rm` + `new`
-whole-file replacement now works in one script (see docs/benchmarks/iter7.md).
-`--tool-help` reads 1/4; peek adoption 0/4 (known non-mover).
-process boundary and is superseded by the in-process freeform extension.
+Status (iter8, 2026-08-01): functional accuracy 100% (raw 64/66, A6
+task-bound only); zero rejections; peek adoption 3/4 pre-edit; input tokens at
+apply_patch-control parity (1.36M avg); edit payload −26% vs iter7. Benchmark
+loop converged (see docs/benchmarks/iter8.md).
 
 ### Phase 6: Add serverless Codex MVP
 
