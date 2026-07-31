@@ -90,7 +90,9 @@ impl CommandError {
             .chars()
             .flat_map(|character| match character {
                 '\n' => "; ".chars().collect::<Vec<_>>(),
-                value if value.is_control() => value.escape_default().collect(),
+                value if crate::parser::go_is_control(value) => {
+                    crate::parser::go_rune_escape(value).chars().collect()
+                }
                 value => vec![value],
             })
             .collect();
@@ -102,8 +104,12 @@ impl std::fmt::Display for CommandError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "command {}, source line {}, operation {:?}, category {}: {}",
-            self.command, self.line, self.operation, self.category, self.message
+            "command {}, source line {}, operation {}, category {}: {}",
+            self.command,
+            self.line,
+            crate::parser::go_quote(&self.operation),
+            self.category,
+            self.message
         )
     }
 }

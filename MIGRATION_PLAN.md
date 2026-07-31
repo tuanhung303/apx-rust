@@ -241,11 +241,30 @@ Deliverables:
 - Emit a typed AST and stable diagnostic reason codes.
 - Differential-run every syntax fixture against Go.
 
-Gate:
+Status (2026-07-31): COMPLETE — exact parity against frozen oracle bcd85fc2f817e7c405f8b92953cd3ad4db165759.
 
+Gate:
 - Exact parity for acceptance/rejection, source span, reason code, and rendered
   diagnostic for the frozen corpus.
 - Fuzzing never panics and all accepted scripts round-trip through the AST.
+
+Evidence:
+
+- `crates/apx-core/tests/corpus_parity.rs`: 112/112 corpus cases exact
+  (accept/reject, source span, reason code, rendered diagnostic).
+- `crates/apx-core/tests/roundtrip.rs`: every accepted corpus script
+  parse -> serialize -> parse is AST-identical.
+- `crates/apx-core/tests/fuzz_safety.rs`: 20k random + 7k corpus-derived
+  mutations never panic; diagnostics never contain raw control characters.
+- Blind differential vs the frozen oracle: 656,030 cases, 0 mismatches
+  (300k + 300k fuzz, 6,030 targeted, 20k tsel cross-product, 30k path fuzz).
+- `go_is_print` Unicode table byte-verified against Go `unicode.IsPrint`
+  (711 ranges, 63,558 code points, 0 divergence); `go_is_control` matches
+  Go `unicode.IsControl` (C0 + C1).
+- Corpus regeneration is pinned: `scripts/parity.py verify` regenerates from
+  the frozen oracle and byte-compares the committed corpus (CI does the same).
+- Known follow-up for Phase 3: Go evaluation errors render a path `%q` context
+  segment; parse-time errors never set it, so this gate is unaffected.
 
 ### Phase 3: Port the evaluator
 

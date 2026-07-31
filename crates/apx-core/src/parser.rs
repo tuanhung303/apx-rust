@@ -1,5 +1,4 @@
 use crate::{CommandError, CommandGroupError, Instruction, Operation, Program};
-use std::path::{Component, Path, PathBuf};
 
 const MAX_HEREDOC_BODY_BYTES: usize = 1 << 20;
 
@@ -53,7 +52,45 @@ pub fn parse(source: &str) -> Result<Program, CommandGroupError> {
         command += 1;
         let source_line = header + 1;
         let operation_name = line.split_whitespace().next().unwrap_or("").to_owned();
-        let parsed = if is_quoted_command(line) && scan_quote(line, false) {
+        let parsed = if let Some(delimiter) = line.strip_prefix("type <<") {
+            match parse_delimiter(delimiter) {
+                Ok(delimiter) => {
+                    let mut body = String::new();
+                    let mut closed = false;
+                    let mut oversized = false;
+                    while index < lines.len() {
+                        if lines[index].text == delimiter {
+                            index += 1;
+                            closed = true;
+                            break;
+                        }
+                        if !oversized {
+                            let part_bytes =
+                                lines[index].text.len() + lines[index].terminator.len();
+                            if part_bytes > MAX_HEREDOC_BODY_BYTES - body.len() {
+                                oversized = true;
+                            } else {
+                                body.push_str(&lines[index].text);
+                                body.push_str(&lines[index].terminator);
+                            }
+                        }
+                        index += 1;
+                    }
+                    if !closed {
+                        Err(format!(
+                            "unterminated heredoc; expected closing delimiter {delimiter}"
+                        ))
+                    } else if oversized {
+                        Err(format!(
+                            "heredoc body exceeds {MAX_HEREDOC_BODY_BYTES} bytes"
+                        ))
+                    } else {
+                        Ok(Operation::Type { text: body })
+                    }
+                }
+                Err(error) => Err(error),
+            }
+        } else if is_quoted_command(line) && scan_quote(line, false) {
             let mut open = true;
             while index < lines.len() {
                 open = scan_quote(&lines[index].text, open);
@@ -66,42 +103,10 @@ pub fn parse(source: &str) -> Result<Program, CommandGroupError> {
                 "physical newline inside quoted operand; encode line terminators as \\n or \\r"
                     .to_owned(),
             )
-        } else if let Some(delimiter) = line.strip_prefix("type <<") {
-            match parse_delimiter(delimiter) {
-                Ok(delimiter) => {
-                    let mut body = String::new();
-                    let mut closed = false;
-                    while index < lines.len() {
-                        if lines[index].text == delimiter {
-                            index += 1;
-                            closed = true;
-                            break;
-                        }
-                        if body.len() + lines[index].text.len() + lines[index].terminator.len()
-                            <= MAX_HEREDOC_BODY_BYTES
-                        {
-                            body.push_str(&lines[index].text);
-                            body.push_str(&lines[index].terminator);
-                        }
-                        index += 1;
-                    }
-                    if !closed {
-                        Err(format!(
-                            "unterminated heredoc; expected closing delimiter {delimiter}"
-                        ))
-                    } else if body.len() > MAX_HEREDOC_BODY_BYTES {
-                        Err(format!(
-                            "heredoc body exceeds {MAX_HEREDOC_BODY_BYTES} bytes"
-                        ))
-                    } else {
-                        Ok(Operation::Type { text: body })
-                    }
-                }
-                Err(error) => Err(error),
-            }
         } else {
             parse_instruction(line)
         };
+
         match parsed {
             Ok(operation) => instructions.push(Instruction {
                 line: source_line,
@@ -174,53 +179,62 @@ fn parse_instruction(line: &str) -> Result<Operation, String> {
         let (line_number, columns) = rest
             .split_once(' ')
             .ok_or_else(|| "unknown or malformed command".to_owned())?;
+        if line_number.is_empty() || contains_re2_whitespace(line_number) {
+            return Err("unknown or malformed command".to_owned());
+        }
         let (start, end) = columns
             .split_once(':')
             .ok_or_else(|| "unknown or malformed command".to_owned())?;
-        let line = positive(line_number, "line reference")?;
-        let start = positive(start, "number")?;
-        let end = positive(end, "number")?;
+        if !is_positive_decimal(start) || !is_positive_decimal(end) {
+            return Err("unknown or malformed command".to_owned());
+        }
+        let line = parse_line_number(line_number)?;
+        let start = parse_integer(start)?;
+        let end = parse_integer(end)?;
         if start > end {
             return Err("selection start exceeds end".to_owned());
         }
         return Ok(Operation::Select { line, start, end });
     }
+
     if let Some(rest) = line.strip_prefix("tsel ") {
         let (line_number, encoded) = rest
             .split_once(' ')
             .ok_or_else(|| "unknown or malformed command".to_owned())?;
-        let line = positive(line_number, "line reference")?;
+        if line_number.is_empty() || contains_re2_whitespace(line_number) || encoded.is_empty() {
+            return Err("unknown or malformed command".to_owned());
+        }
+        let line = parse_line_number(line_number)?;
         let (text, trailing) = decode_quoted(encoded)
             .map_err(|error| format!("invalid quoted string for tsel: {error}"))?;
+        // Go validates the count operand (decodeTextSelection) before the
+        // caller's empty-text and one-line content checks.
+        let count = if trailing.is_empty() {
+            1
+        } else if !is_operand_whitespace_byte(trailing.as_bytes()[0]) {
+            return Err("tsel count must be separated by whitespace".to_owned());
+        } else {
+            let count_text = trailing.trim_matches([' ', '\t', '\r', '\n']);
+            if count_text.is_empty() {
+                1
+            } else if !is_positive_decimal(count_text) {
+                return Err("invalid tsel count".to_owned());
+            } else {
+                go_atoi(count_text).map_err(|_| "tsel count is out of range".to_owned())?
+            }
+        };
         if text.is_empty() {
             return Err("tsel text must not be empty".to_owned());
         }
         if text.contains(['\r', '\n']) {
             return Err("tsel text must stay on one line".to_owned());
         }
-        let count = if trailing.trim().is_empty() {
-            1
-        } else {
-            positive(trailing.trim(), "tsel count").map_err(|_| "invalid tsel count".to_owned())?
-        };
         return Ok(Operation::TextSelect { line, text, count });
     }
+
     if let Some(rest) = line.strip_prefix("bsel ") {
-        let (start, trailing) =
-            decode_quoted(rest).map_err(|error| format!("invalid bsel quoted strings: {error}"))?;
-        if trailing.is_empty() || !trailing.as_bytes()[0].is_ascii_whitespace() {
-            return Err(
-                "invalid bsel quoted strings: quoted operands must be separated by whitespace"
-                    .to_owned(),
-            );
-        }
-        let (end, remainder) = decode_quoted(trailing.trim_start())
+        let (start, end) = decode_two_quoted_strings(rest)
             .map_err(|error| format!("invalid bsel quoted strings: {error}"))?;
-        if !remainder.trim().is_empty() {
-            return Err(
-                "invalid bsel quoted strings: trailing text after bsel literals".to_owned(),
-            );
-        }
         if start.is_empty() || end.is_empty() {
             return Err("bsel literals must not be empty".to_owned());
         }
@@ -229,25 +243,37 @@ fn parse_instruction(line: &str) -> Result<Operation, String> {
         }
         return Ok(Operation::BlockSelect { start, end });
     }
+
     if let Some(rest) = line.strip_prefix("rsel ") {
-        let (start, end) = rest
-            .split_once(':')
+        // Go's `^rsel (\S+):(\S+)$` splits at the rightmost colon that leaves
+        // both halves non-empty; any whitespace in the operand rejects.
+        let split = if contains_re2_whitespace(rest) {
+            None
+        } else {
+            rest.rmatch_indices(':')
+                .map(|(index, _)| index)
+                .find(|&index| index > 0 && index + 1 < rest.len())
+        };
+        let (start, end) = split
+            .map(|index| (&rest[..index], &rest[index + 1..]))
             .ok_or_else(|| "unknown or malformed command".to_owned())?;
-        let start = positive(start, "line reference")?;
-        let end = positive(end, "line reference")?;
+        let start = parse_line_number(start)?;
+        let end = parse_line_number(end)?;
         if start > end {
             return Err("line range start exceeds end".to_owned());
         }
         return Ok(Operation::RangeSelect { start, end });
     }
+
     if let Some(rest) = line.strip_prefix("type ") {
         let (text, trailing) = decode_quoted(rest)
             .map_err(|error| format!("invalid quoted string for type: {error}"))?;
-        if !trailing.trim().is_empty() {
+        if !only_operand_whitespace(trailing) {
             return Err("trailing text after type string".to_owned());
         }
         return Ok(Operation::Type { text });
     }
+
     Err("unknown or malformed command".to_owned())
 }
 
@@ -274,59 +300,524 @@ fn parse_delimiter(source: &str) -> Result<&str, String> {
 
 fn decode_quoted(source: &str) -> Result<(String, &str), String> {
     let source = source.trim_start_matches([' ', '\t', '\r', '\n']);
+    if source.is_empty() {
+        return Err("unexpected end of JSON input".to_owned());
+    }
     if !source.starts_with('"') {
         return Err("quoted operand must begin with a double quote".to_owned());
     }
+    let bytes = source.as_bytes();
     let mut escaped = false;
-    for (index, character) in source.char_indices().skip(1) {
-        match character {
-            _ if escaped => escaped = false,
-            '\\' => escaped = true,
-            '"' => {
-                let end = index + 1;
-                let encoded = source[..end].replace('\t', "\\t");
-                let value: String =
-                    serde_json::from_str(&encoded).map_err(|error| error.to_string())?;
-                return Ok((value, &source[end..]));
-            }
-            '\n' | '\r' => {
-                return Err(
-                    "physical newline inside quoted operand; encode line terminators as \\n or \\r"
-                        .to_owned(),
-                );
-            }
-            _ => {}
+    let mut index = 1;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' {
+            escaped = true;
+        } else if byte == b'"' {
+            let end = index + 1;
+            let encoded = source[..end].replace('\t', "\\t");
+            let value = decode_go_string(&encoded)?;
+            return Ok((value, &source[end..]));
         }
+        index += 1;
     }
-    Err("unexpected end of JSON input".to_owned())
+    let encoded = source.replace('\t', "\\t");
+    let value = decode_go_string(&encoded)?;
+    Ok((value, ""))
 }
 
-fn positive(value: &str, description: &str) -> Result<usize, String> {
-    if value.is_empty()
-        || value.starts_with('0')
-        || !value.bytes().all(|character| character.is_ascii_digit())
-    {
-        return Err(format!("invalid {description} {value:?}"));
+fn parse_line_number(value: &str) -> Result<usize, String> {
+    if !is_positive_decimal(value) {
+        return Err(format!("invalid line reference {}", go_quote(value)));
     }
+    go_atoi(value).map_err(|_| "line reference is out of range".to_owned())
+}
+
+fn parse_integer(value: &str) -> Result<usize, String> {
+    go_atoi(value).map_err(|_| "number is out of range".to_owned())
+}
+
+fn decode_two_quoted_strings(encoded: &str) -> Result<(String, String), String> {
+    let (start, trailing) = decode_quoted(encoded)?;
+    if trailing.is_empty() || !is_operand_whitespace_byte(trailing.as_bytes()[0]) {
+        return Err("quoted operands must be separated by whitespace".to_owned());
+    }
+    let remaining = trailing.trim_start_matches([' ', '\t', '\r', '\n']);
+    let (end, remainder) = decode_quoted(remaining)?;
+    if !only_operand_whitespace(remainder) {
+        return Err("trailing text after bsel literals".to_owned());
+    }
+    Ok((start, end))
+}
+
+/// Go's `absoluteLinePattern` / selector digit groups: `^[1-9][0-9]*$`.
+fn is_positive_decimal(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    match bytes.next() {
+        Some(first) if first != b'0' && first.is_ascii_digit() => {}
+        _ => return false,
+    }
+    bytes.all(|byte| byte.is_ascii_digit())
+}
+
+/// Go's `strconv.Atoi` on a 64-bit platform: rejects values outside the int64
+/// range (positive results are stored as `usize`).
+fn go_atoi(value: &str) -> Result<usize, ()> {
+    let parsed: i64 = value.parse().map_err(|_| ())?;
+    Ok(parsed as usize)
+}
+
+/// Go RE2's `\s` class (`[\t\n\f\r ]`), used by the `(\S+)` groups in the
+/// selector regexes.
+fn contains_re2_whitespace(value: &str) -> bool {
     value
-        .parse()
-        .map_err(|_| format!("{description} is out of range"))
+        .bytes()
+        .any(|byte| matches!(byte, b'\t' | b'\n' | b'\x0c' | b'\r' | b' '))
+}
+
+fn is_operand_whitespace_byte(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\r' | b'\n')
+}
+
+fn only_operand_whitespace(value: &str) -> bool {
+    value.bytes().all(is_operand_whitespace_byte)
+}
+
+/// Decodes one JSON string token (including its surrounding quotes) with the
+/// exact acceptance rules and error wording of Go's `encoding/json` scanner
+/// and `unquoteBytes`. Lone surrogate escapes decode to U+FFFD and are
+/// accepted; raw control bytes are rejected.
+fn decode_go_string(encoded: &str) -> Result<String, String> {
+    let bytes = encoded.as_bytes();
+    if bytes.is_empty() || bytes[0] != b'"' {
+        return Err("unexpected end of JSON input".to_owned());
+    }
+    let mut result = String::new();
+    let mut index = 1;
+    let mut state = GoStringState::Content;
+    loop {
+        let (byte, eof) = if index < bytes.len() {
+            (bytes[index], false)
+        } else {
+            (b' ', true)
+        };
+        match state {
+            GoStringState::Content => {
+                if eof {
+                    return Err("unexpected end of JSON input".to_owned());
+                }
+                match byte {
+                    b'"' => return Ok(result),
+                    b'\\' => {
+                        state = GoStringState::Escape;
+                        index += 1;
+                    }
+                    byte if byte < 0x20 => {
+                        return Err(format!(
+                            "invalid character {} in string literal",
+                            go_quote_char_byte(byte)
+                        ));
+                    }
+                    _ => {
+                        let width = utf8_width(byte);
+                        result.push_str(&encoded[index..index + width]);
+                        index += width;
+                    }
+                }
+            }
+            GoStringState::Escape => {
+                state = GoStringState::Content;
+                match byte {
+                    b'b' => result.push('\u{0008}'),
+                    b'f' => result.push('\u{000c}'),
+                    b'n' => result.push('\n'),
+                    b'r' => result.push('\r'),
+                    b't' => result.push('\t'),
+                    b'\\' => result.push('\\'),
+                    b'/' => result.push('/'),
+                    b'"' => result.push('"'),
+                    b'u' => {
+                        state = GoStringState::Unicode {
+                            value: 0,
+                            remaining: 4,
+                        };
+                        index += 1;
+                        continue;
+                    }
+                    _ => {
+                        return Err(format!(
+                            "invalid character {} in string escape code",
+                            go_quote_char_byte(byte)
+                        ));
+                    }
+                }
+                index += 1;
+            }
+            GoStringState::Unicode { value, remaining } => {
+                if !byte.is_ascii_hexdigit() {
+                    return Err(format!(
+                        "invalid character {} in \\u hexadecimal character escape",
+                        go_quote_char_byte(byte)
+                    ));
+                }
+                let value = value * 16 + hex_digit(byte);
+                if remaining == 1 {
+                    index += 1;
+                    state = GoStringState::Content;
+                    if (0xD800..=0xDFFF).contains(&value) {
+                        if let Some(low) = peek_u_escape(bytes, index) {
+                            let decoded = utf16_decode(value, low);
+                            if decoded != 0xFFFD {
+                                index += 6;
+                                result.push(
+                                    char::from_u32(decoded)
+                                        .expect("decoded pair is a scalar value"),
+                                );
+                                continue;
+                            }
+                        }
+                        result.push('\u{FFFD}');
+                    } else {
+                        result.push(char::from_u32(value).expect("non-surrogate escape is valid"));
+                    }
+                    continue;
+                }
+                state = GoStringState::Unicode {
+                    value,
+                    remaining: remaining - 1,
+                };
+                index += 1;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GoStringState {
+    Content,
+    Escape,
+    Unicode { value: u32, remaining: u8 },
+}
+
+/// Mirrors Go's `getu4`: requires the next six bytes to be `\uHHHH`.
+fn peek_u_escape(bytes: &[u8], index: usize) -> Option<u32> {
+    if index + 6 > bytes.len() || bytes[index] != b'\\' || bytes[index + 1] != b'u' {
+        return None;
+    }
+    let mut value = 0u32;
+    for &byte in &bytes[index + 2..index + 6] {
+        if !byte.is_ascii_hexdigit() {
+            return None;
+        }
+        value = value * 16 + hex_digit(byte);
+    }
+    Some(value)
+}
+
+/// Go's `utf16.DecodeRune`: combines a valid high/low surrogate pair or
+/// returns U+FFFD.
+fn utf16_decode(high: u32, low: u32) -> u32 {
+    if (0xD800..=0xDBFF).contains(&high) && (0xDC00..=0xDFFF).contains(&low) {
+        (high - 0xD800) * 0x400 + (low - 0xDC00) + 0x10000
+    } else {
+        0xFFFD
+    }
+}
+
+fn hex_digit(byte: u8) -> u32 {
+    match byte {
+        b'0'..=b'9' => (byte - b'0') as u32,
+        b'a'..=b'f' => (byte - b'a' + 10) as u32,
+        b'A'..=b'F' => (byte - b'A' + 10) as u32,
+        _ => unreachable!(),
+    }
+}
+
+fn utf8_width(lead: u8) -> usize {
+    if lead < 0x80 {
+        1
+    } else if lead < 0xe0 {
+        2
+    } else if lead < 0xf0 {
+        3
+    } else {
+        4
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Go-compatible quoting helpers (mirror `strconv.Quote`, `strconv.QuoteRune`,
+// `unicode.IsPrint`/`IsControl`, and `encoding/json`'s `quoteChar`).
+
+/// Renders a rune the way Go's `strconv.QuoteRune` does, without the
+/// surrounding single quotes. Only meaningful for non-printable runes.
+pub(crate) fn go_rune_escape(character: char) -> String {
+    match character {
+        '\u{0007}' => "\\a".to_owned(),
+        '\u{0008}' => "\\b".to_owned(),
+        '\u{000c}' => "\\f".to_owned(),
+        '\n' => "\\n".to_owned(),
+        '\r' => "\\r".to_owned(),
+        '\t' => "\\t".to_owned(),
+        '\u{000b}' => "\\v".to_owned(),
+        character if (character as u32) < 0x20 || (character as u32) == 0x7f => {
+            format!("\\x{:02x}", character as u32)
+        }
+        character if (character as u32) < 0x10000 => {
+            format!("\\u{:04x}", character as u32)
+        }
+        character => format!("\\U{:08x}", character as u32),
+    }
+}
+
+/// Renders `value` the way Go's `%q` (`strconv.Quote`) does.
+pub(crate) fn go_quote(value: &str) -> String {
+    let mut result = String::with_capacity(value.len() + 2);
+    result.push('"');
+    for character in value.chars() {
+        match character {
+            '\u{0007}' => result.push_str("\\a"),
+            '\u{0008}' => result.push_str("\\b"),
+            '\u{000c}' => result.push_str("\\f"),
+            '\n' => result.push_str("\\n"),
+            '\r' => result.push_str("\\r"),
+            '\t' => result.push_str("\\t"),
+            '\u{000b}' => result.push_str("\\v"),
+            '\\' => result.push_str("\\\\"),
+            '"' => result.push_str("\\\""),
+            character if (character as u32) < 0x20 || (character as u32) == 0x7f => {
+                result.push_str(&format!("\\x{:02x}", character as u32));
+            }
+            character if !go_is_print(character) => {
+                if (character as u32) < 0x10000 {
+                    result.push_str(&format!("\\u{:04x}", character as u32));
+                } else {
+                    result.push_str(&format!("\\U{:08x}", character as u32));
+                }
+            }
+            character => result.push(character),
+        }
+    }
+    result.push('"');
+    result
+}
+
+/// Exact Go 1.26.5 `unicode.IsControl` table (category Cc only): control
+/// characters as defined by `unicode.IsControl`.
+pub(crate) fn go_is_control(character: char) -> bool {
+    let code = character as u32;
+    matches!(
+        code,
+        0x0..=0x1F | 0x7F..=0x9F
+    )
+}
+
+/// Exact Go 1.26.5 `unicode.IsPrint` table: categories L, M, N, P, S plus
+/// the ASCII space, matching `strconv.Quote`/`strconv.QuoteRune` escape
+/// decisions.
+fn go_is_print(character: char) -> bool {
+    let code = character as u32;
+    matches!(
+        code,
+        0x20..=0x7E | 0xA1..=0xAC | 0xAE..=0x377 | 0x37A..=0x37F | 0x384..=0x38A |
+        0x38C..=0x38C | 0x38E..=0x3A1 | 0x3A3..=0x52F | 0x531..=0x556 | 0x559..=0x58A |
+        0x58D..=0x58F | 0x591..=0x5C7 | 0x5D0..=0x5EA | 0x5EF..=0x5F4 | 0x606..=0x61B |
+        0x61D..=0x6DC | 0x6DE..=0x70D | 0x710..=0x74A | 0x74D..=0x7B1 | 0x7C0..=0x7FA |
+        0x7FD..=0x82D | 0x830..=0x83E | 0x840..=0x85B | 0x85E..=0x85E | 0x860..=0x86A |
+        0x870..=0x88E | 0x898..=0x8E1 | 0x8E3..=0x983 | 0x985..=0x98C | 0x98F..=0x990 |
+        0x993..=0x9A8 | 0x9AA..=0x9B0 | 0x9B2..=0x9B2 | 0x9B6..=0x9B9 | 0x9BC..=0x9C4 |
+        0x9C7..=0x9C8 | 0x9CB..=0x9CE | 0x9D7..=0x9D7 | 0x9DC..=0x9DD | 0x9DF..=0x9E3 |
+        0x9E6..=0x9FE | 0xA01..=0xA03 | 0xA05..=0xA0A | 0xA0F..=0xA10 | 0xA13..=0xA28 |
+        0xA2A..=0xA30 | 0xA32..=0xA33 | 0xA35..=0xA36 | 0xA38..=0xA39 | 0xA3C..=0xA3C |
+        0xA3E..=0xA42 | 0xA47..=0xA48 | 0xA4B..=0xA4D | 0xA51..=0xA51 | 0xA59..=0xA5C |
+        0xA5E..=0xA5E | 0xA66..=0xA76 | 0xA81..=0xA83 | 0xA85..=0xA8D | 0xA8F..=0xA91 |
+        0xA93..=0xAA8 | 0xAAA..=0xAB0 | 0xAB2..=0xAB3 | 0xAB5..=0xAB9 | 0xABC..=0xAC5 |
+        0xAC7..=0xAC9 | 0xACB..=0xACD | 0xAD0..=0xAD0 | 0xAE0..=0xAE3 | 0xAE6..=0xAF1 |
+        0xAF9..=0xAFF | 0xB01..=0xB03 | 0xB05..=0xB0C | 0xB0F..=0xB10 | 0xB13..=0xB28 |
+        0xB2A..=0xB30 | 0xB32..=0xB33 | 0xB35..=0xB39 | 0xB3C..=0xB44 | 0xB47..=0xB48 |
+        0xB4B..=0xB4D | 0xB55..=0xB57 | 0xB5C..=0xB5D | 0xB5F..=0xB63 | 0xB66..=0xB77 |
+        0xB82..=0xB83 | 0xB85..=0xB8A | 0xB8E..=0xB90 | 0xB92..=0xB95 | 0xB99..=0xB9A |
+        0xB9C..=0xB9C | 0xB9E..=0xB9F | 0xBA3..=0xBA4 | 0xBA8..=0xBAA | 0xBAE..=0xBB9 |
+        0xBBE..=0xBC2 | 0xBC6..=0xBC8 | 0xBCA..=0xBCD | 0xBD0..=0xBD0 | 0xBD7..=0xBD7 |
+        0xBE6..=0xBFA | 0xC00..=0xC0C | 0xC0E..=0xC10 | 0xC12..=0xC28 | 0xC2A..=0xC39 |
+        0xC3C..=0xC44 | 0xC46..=0xC48 | 0xC4A..=0xC4D | 0xC55..=0xC56 | 0xC58..=0xC5A |
+        0xC5D..=0xC5D | 0xC60..=0xC63 | 0xC66..=0xC6F | 0xC77..=0xC8C | 0xC8E..=0xC90 |
+        0xC92..=0xCA8 | 0xCAA..=0xCB3 | 0xCB5..=0xCB9 | 0xCBC..=0xCC4 | 0xCC6..=0xCC8 |
+        0xCCA..=0xCCD | 0xCD5..=0xCD6 | 0xCDD..=0xCDE | 0xCE0..=0xCE3 | 0xCE6..=0xCEF |
+        0xCF1..=0xCF3 | 0xD00..=0xD0C | 0xD0E..=0xD10 | 0xD12..=0xD44 | 0xD46..=0xD48 |
+        0xD4A..=0xD4F | 0xD54..=0xD63 | 0xD66..=0xD7F | 0xD81..=0xD83 | 0xD85..=0xD96 |
+        0xD9A..=0xDB1 | 0xDB3..=0xDBB | 0xDBD..=0xDBD | 0xDC0..=0xDC6 | 0xDCA..=0xDCA |
+        0xDCF..=0xDD4 | 0xDD6..=0xDD6 | 0xDD8..=0xDDF | 0xDE6..=0xDEF | 0xDF2..=0xDF4 |
+        0xE01..=0xE3A | 0xE3F..=0xE5B | 0xE81..=0xE82 | 0xE84..=0xE84 | 0xE86..=0xE8A |
+        0xE8C..=0xEA3 | 0xEA5..=0xEA5 | 0xEA7..=0xEBD | 0xEC0..=0xEC4 | 0xEC6..=0xEC6 |
+        0xEC8..=0xECE | 0xED0..=0xED9 | 0xEDC..=0xEDF | 0xF00..=0xF47 | 0xF49..=0xF6C |
+        0xF71..=0xF97 | 0xF99..=0xFBC | 0xFBE..=0xFCC | 0xFCE..=0xFDA | 0x1000..=0x10C5 |
+        0x10C7..=0x10C7 | 0x10CD..=0x10CD | 0x10D0..=0x1248 | 0x124A..=0x124D | 0x1250..=0x1256 |
+        0x1258..=0x1258 | 0x125A..=0x125D | 0x1260..=0x1288 | 0x128A..=0x128D | 0x1290..=0x12B0 |
+        0x12B2..=0x12B5 | 0x12B8..=0x12BE | 0x12C0..=0x12C0 | 0x12C2..=0x12C5 | 0x12C8..=0x12D6 |
+        0x12D8..=0x1310 | 0x1312..=0x1315 | 0x1318..=0x135A | 0x135D..=0x137C | 0x1380..=0x1399 |
+        0x13A0..=0x13F5 | 0x13F8..=0x13FD | 0x1400..=0x167F | 0x1681..=0x169C | 0x16A0..=0x16F8 |
+        0x1700..=0x1715 | 0x171F..=0x1736 | 0x1740..=0x1753 | 0x1760..=0x176C | 0x176E..=0x1770 |
+        0x1772..=0x1773 | 0x1780..=0x17DD | 0x17E0..=0x17E9 | 0x17F0..=0x17F9 | 0x1800..=0x180D |
+        0x180F..=0x1819 | 0x1820..=0x1878 | 0x1880..=0x18AA | 0x18B0..=0x18F5 | 0x1900..=0x191E |
+        0x1920..=0x192B | 0x1930..=0x193B | 0x1940..=0x1940 | 0x1944..=0x196D | 0x1970..=0x1974 |
+        0x1980..=0x19AB | 0x19B0..=0x19C9 | 0x19D0..=0x19DA | 0x19DE..=0x1A1B | 0x1A1E..=0x1A5E |
+        0x1A60..=0x1A7C | 0x1A7F..=0x1A89 | 0x1A90..=0x1A99 | 0x1AA0..=0x1AAD | 0x1AB0..=0x1ACE |
+        0x1B00..=0x1B4C | 0x1B50..=0x1B7E | 0x1B80..=0x1BF3 | 0x1BFC..=0x1C37 | 0x1C3B..=0x1C49 |
+        0x1C4D..=0x1C88 | 0x1C90..=0x1CBA | 0x1CBD..=0x1CC7 | 0x1CD0..=0x1CFA | 0x1D00..=0x1F15 |
+        0x1F18..=0x1F1D | 0x1F20..=0x1F45 | 0x1F48..=0x1F4D | 0x1F50..=0x1F57 | 0x1F59..=0x1F59 |
+        0x1F5B..=0x1F5B | 0x1F5D..=0x1F5D | 0x1F5F..=0x1F7D | 0x1F80..=0x1FB4 | 0x1FB6..=0x1FC4 |
+        0x1FC6..=0x1FD3 | 0x1FD6..=0x1FDB | 0x1FDD..=0x1FEF | 0x1FF2..=0x1FF4 | 0x1FF6..=0x1FFE |
+        0x2010..=0x2027 | 0x2030..=0x205E | 0x2070..=0x2071 | 0x2074..=0x208E | 0x2090..=0x209C |
+        0x20A0..=0x20C0 | 0x20D0..=0x20F0 | 0x2100..=0x218B | 0x2190..=0x2426 | 0x2440..=0x244A |
+        0x2460..=0x2B73 | 0x2B76..=0x2B95 | 0x2B97..=0x2CF3 | 0x2CF9..=0x2D25 | 0x2D27..=0x2D27 |
+        0x2D2D..=0x2D2D | 0x2D30..=0x2D67 | 0x2D6F..=0x2D70 | 0x2D7F..=0x2D96 | 0x2DA0..=0x2DA6 |
+        0x2DA8..=0x2DAE | 0x2DB0..=0x2DB6 | 0x2DB8..=0x2DBE | 0x2DC0..=0x2DC6 | 0x2DC8..=0x2DCE |
+        0x2DD0..=0x2DD6 | 0x2DD8..=0x2DDE | 0x2DE0..=0x2E5D | 0x2E80..=0x2E99 | 0x2E9B..=0x2EF3 |
+        0x2F00..=0x2FD5 | 0x2FF0..=0x2FFB | 0x3001..=0x303F | 0x3041..=0x3096 | 0x3099..=0x30FF |
+        0x3105..=0x312F | 0x3131..=0x318E | 0x3190..=0x31E3 | 0x31F0..=0x321E | 0x3220..=0xA48C |
+        0xA490..=0xA4C6 | 0xA4D0..=0xA62B | 0xA640..=0xA6F7 | 0xA700..=0xA7CA | 0xA7D0..=0xA7D1 |
+        0xA7D3..=0xA7D3 | 0xA7D5..=0xA7D9 | 0xA7F2..=0xA82C | 0xA830..=0xA839 | 0xA840..=0xA877 |
+        0xA880..=0xA8C5 | 0xA8CE..=0xA8D9 | 0xA8E0..=0xA953 | 0xA95F..=0xA97C | 0xA980..=0xA9CD |
+        0xA9CF..=0xA9D9 | 0xA9DE..=0xA9FE | 0xAA00..=0xAA36 | 0xAA40..=0xAA4D | 0xAA50..=0xAA59 |
+        0xAA5C..=0xAAC2 | 0xAADB..=0xAAF6 | 0xAB01..=0xAB06 | 0xAB09..=0xAB0E | 0xAB11..=0xAB16 |
+        0xAB20..=0xAB26 | 0xAB28..=0xAB2E | 0xAB30..=0xAB6B | 0xAB70..=0xABED | 0xABF0..=0xABF9 |
+        0xAC00..=0xD7A3 | 0xD7B0..=0xD7C6 | 0xD7CB..=0xD7FB | 0xF900..=0xFA6D | 0xFA70..=0xFAD9 |
+        0xFB00..=0xFB06 | 0xFB13..=0xFB17 | 0xFB1D..=0xFB36 | 0xFB38..=0xFB3C | 0xFB3E..=0xFB3E |
+        0xFB40..=0xFB41 | 0xFB43..=0xFB44 | 0xFB46..=0xFBC2 | 0xFBD3..=0xFD8F | 0xFD92..=0xFDC7 |
+        0xFDCF..=0xFDCF | 0xFDF0..=0xFE19 | 0xFE20..=0xFE52 | 0xFE54..=0xFE66 | 0xFE68..=0xFE6B |
+        0xFE70..=0xFE74 | 0xFE76..=0xFEFC | 0xFF01..=0xFFBE | 0xFFC2..=0xFFC7 | 0xFFCA..=0xFFCF |
+        0xFFD2..=0xFFD7 | 0xFFDA..=0xFFDC | 0xFFE0..=0xFFE6 | 0xFFE8..=0xFFEE | 0xFFFC..=0xFFFD |
+        0x10000..=0x1000B | 0x1000D..=0x10026 | 0x10028..=0x1003A | 0x1003C..=0x1003D | 0x1003F..=0x1004D |
+        0x10050..=0x1005D | 0x10080..=0x100FA | 0x10100..=0x10102 | 0x10107..=0x10133 | 0x10137..=0x1018E |
+        0x10190..=0x1019C | 0x101A0..=0x101A0 | 0x101D0..=0x101FD | 0x10280..=0x1029C | 0x102A0..=0x102D0 |
+        0x102E0..=0x102FB | 0x10300..=0x10323 | 0x1032D..=0x1034A | 0x10350..=0x1037A | 0x10380..=0x1039D |
+        0x1039F..=0x103C3 | 0x103C8..=0x103D5 | 0x10400..=0x1049D | 0x104A0..=0x104A9 | 0x104B0..=0x104D3 |
+        0x104D8..=0x104FB | 0x10500..=0x10527 | 0x10530..=0x10563 | 0x1056F..=0x1057A | 0x1057C..=0x1058A |
+        0x1058C..=0x10592 | 0x10594..=0x10595 | 0x10597..=0x105A1 | 0x105A3..=0x105B1 | 0x105B3..=0x105B9 |
+        0x105BB..=0x105BC | 0x10600..=0x10736 | 0x10740..=0x10755 | 0x10760..=0x10767 | 0x10780..=0x10785 |
+        0x10787..=0x107B0 | 0x107B2..=0x107BA | 0x10800..=0x10805 | 0x10808..=0x10808 | 0x1080A..=0x10835 |
+        0x10837..=0x10838 | 0x1083C..=0x1083C | 0x1083F..=0x10855 | 0x10857..=0x1089E | 0x108A7..=0x108AF |
+        0x108E0..=0x108F2 | 0x108F4..=0x108F5 | 0x108FB..=0x1091B | 0x1091F..=0x10939 | 0x1093F..=0x1093F |
+        0x10980..=0x109B7 | 0x109BC..=0x109CF | 0x109D2..=0x10A03 | 0x10A05..=0x10A06 | 0x10A0C..=0x10A13 |
+        0x10A15..=0x10A17 | 0x10A19..=0x10A35 | 0x10A38..=0x10A3A | 0x10A3F..=0x10A48 | 0x10A50..=0x10A58 |
+        0x10A60..=0x10A9F | 0x10AC0..=0x10AE6 | 0x10AEB..=0x10AF6 | 0x10B00..=0x10B35 | 0x10B39..=0x10B55 |
+        0x10B58..=0x10B72 | 0x10B78..=0x10B91 | 0x10B99..=0x10B9C | 0x10BA9..=0x10BAF | 0x10C00..=0x10C48 |
+        0x10C80..=0x10CB2 | 0x10CC0..=0x10CF2 | 0x10CFA..=0x10D27 | 0x10D30..=0x10D39 | 0x10E60..=0x10E7E |
+        0x10E80..=0x10EA9 | 0x10EAB..=0x10EAD | 0x10EB0..=0x10EB1 | 0x10EFD..=0x10F27 | 0x10F30..=0x10F59 |
+        0x10F70..=0x10F89 | 0x10FB0..=0x10FCB | 0x10FE0..=0x10FF6 | 0x11000..=0x1104D | 0x11052..=0x11075 |
+        0x1107F..=0x110BC | 0x110BE..=0x110C2 | 0x110D0..=0x110E8 | 0x110F0..=0x110F9 | 0x11100..=0x11134 |
+        0x11136..=0x11147 | 0x11150..=0x11176 | 0x11180..=0x111DF | 0x111E1..=0x111F4 | 0x11200..=0x11211 |
+        0x11213..=0x11241 | 0x11280..=0x11286 | 0x11288..=0x11288 | 0x1128A..=0x1128D | 0x1128F..=0x1129D |
+        0x1129F..=0x112A9 | 0x112B0..=0x112EA | 0x112F0..=0x112F9 | 0x11300..=0x11303 | 0x11305..=0x1130C |
+        0x1130F..=0x11310 | 0x11313..=0x11328 | 0x1132A..=0x11330 | 0x11332..=0x11333 | 0x11335..=0x11339 |
+        0x1133B..=0x11344 | 0x11347..=0x11348 | 0x1134B..=0x1134D | 0x11350..=0x11350 | 0x11357..=0x11357 |
+        0x1135D..=0x11363 | 0x11366..=0x1136C | 0x11370..=0x11374 | 0x11400..=0x1145B | 0x1145D..=0x11461 |
+        0x11480..=0x114C7 | 0x114D0..=0x114D9 | 0x11580..=0x115B5 | 0x115B8..=0x115DD | 0x11600..=0x11644 |
+        0x11650..=0x11659 | 0x11660..=0x1166C | 0x11680..=0x116B9 | 0x116C0..=0x116C9 | 0x11700..=0x1171A |
+        0x1171D..=0x1172B | 0x11730..=0x11746 | 0x11800..=0x1183B | 0x118A0..=0x118F2 | 0x118FF..=0x11906 |
+        0x11909..=0x11909 | 0x1190C..=0x11913 | 0x11915..=0x11916 | 0x11918..=0x11935 | 0x11937..=0x11938 |
+        0x1193B..=0x11946 | 0x11950..=0x11959 | 0x119A0..=0x119A7 | 0x119AA..=0x119D7 | 0x119DA..=0x119E4 |
+        0x11A00..=0x11A47 | 0x11A50..=0x11AA2 | 0x11AB0..=0x11AF8 | 0x11B00..=0x11B09 | 0x11C00..=0x11C08 |
+        0x11C0A..=0x11C36 | 0x11C38..=0x11C45 | 0x11C50..=0x11C6C | 0x11C70..=0x11C8F | 0x11C92..=0x11CA7 |
+        0x11CA9..=0x11CB6 | 0x11D00..=0x11D06 | 0x11D08..=0x11D09 | 0x11D0B..=0x11D36 | 0x11D3A..=0x11D3A |
+        0x11D3C..=0x11D3D | 0x11D3F..=0x11D47 | 0x11D50..=0x11D59 | 0x11D60..=0x11D65 | 0x11D67..=0x11D68 |
+        0x11D6A..=0x11D8E | 0x11D90..=0x11D91 | 0x11D93..=0x11D98 | 0x11DA0..=0x11DA9 | 0x11EE0..=0x11EF8 |
+        0x11F00..=0x11F10 | 0x11F12..=0x11F3A | 0x11F3E..=0x11F59 | 0x11FB0..=0x11FB0 | 0x11FC0..=0x11FF1 |
+        0x11FFF..=0x12399 | 0x12400..=0x1246E | 0x12470..=0x12474 | 0x12480..=0x12543 | 0x12F90..=0x12FF2 |
+        0x13000..=0x1342F | 0x13440..=0x13455 | 0x14400..=0x14646 | 0x16800..=0x16A38 | 0x16A40..=0x16A5E |
+        0x16A60..=0x16A69 | 0x16A6E..=0x16ABE | 0x16AC0..=0x16AC9 | 0x16AD0..=0x16AED | 0x16AF0..=0x16AF5 |
+        0x16B00..=0x16B45 | 0x16B50..=0x16B59 | 0x16B5B..=0x16B61 | 0x16B63..=0x16B77 | 0x16B7D..=0x16B8F |
+        0x16E40..=0x16E9A | 0x16F00..=0x16F4A | 0x16F4F..=0x16F87 | 0x16F8F..=0x16F9F | 0x16FE0..=0x16FE4 |
+        0x16FF0..=0x16FF1 | 0x17000..=0x187F7 | 0x18800..=0x18CD5 | 0x18D00..=0x18D08 | 0x1AFF0..=0x1AFF3 |
+        0x1AFF5..=0x1AFFB | 0x1AFFD..=0x1AFFE | 0x1B000..=0x1B122 | 0x1B132..=0x1B132 | 0x1B150..=0x1B152 |
+        0x1B155..=0x1B155 | 0x1B164..=0x1B167 | 0x1B170..=0x1B2FB | 0x1BC00..=0x1BC6A | 0x1BC70..=0x1BC7C |
+        0x1BC80..=0x1BC88 | 0x1BC90..=0x1BC99 | 0x1BC9C..=0x1BC9F | 0x1CF00..=0x1CF2D | 0x1CF30..=0x1CF46 |
+        0x1CF50..=0x1CFC3 | 0x1D000..=0x1D0F5 | 0x1D100..=0x1D126 | 0x1D129..=0x1D172 | 0x1D17B..=0x1D1EA |
+        0x1D200..=0x1D245 | 0x1D2C0..=0x1D2D3 | 0x1D2E0..=0x1D2F3 | 0x1D300..=0x1D356 | 0x1D360..=0x1D378 |
+        0x1D400..=0x1D454 | 0x1D456..=0x1D49C | 0x1D49E..=0x1D49F | 0x1D4A2..=0x1D4A2 | 0x1D4A5..=0x1D4A6 |
+        0x1D4A9..=0x1D4AC | 0x1D4AE..=0x1D4B9 | 0x1D4BB..=0x1D4BB | 0x1D4BD..=0x1D4C3 | 0x1D4C5..=0x1D505 |
+        0x1D507..=0x1D50A | 0x1D50D..=0x1D514 | 0x1D516..=0x1D51C | 0x1D51E..=0x1D539 | 0x1D53B..=0x1D53E |
+        0x1D540..=0x1D544 | 0x1D546..=0x1D546 | 0x1D54A..=0x1D550 | 0x1D552..=0x1D6A5 | 0x1D6A8..=0x1D7CB |
+        0x1D7CE..=0x1DA8B | 0x1DA9B..=0x1DA9F | 0x1DAA1..=0x1DAAF | 0x1DF00..=0x1DF1E | 0x1DF25..=0x1DF2A |
+        0x1E000..=0x1E006 | 0x1E008..=0x1E018 | 0x1E01B..=0x1E021 | 0x1E023..=0x1E024 | 0x1E026..=0x1E02A |
+        0x1E030..=0x1E06D | 0x1E08F..=0x1E08F | 0x1E100..=0x1E12C | 0x1E130..=0x1E13D | 0x1E140..=0x1E149 |
+        0x1E14E..=0x1E14F | 0x1E290..=0x1E2AE | 0x1E2C0..=0x1E2F9 | 0x1E2FF..=0x1E2FF | 0x1E4D0..=0x1E4F9 |
+        0x1E7E0..=0x1E7E6 | 0x1E7E8..=0x1E7EB | 0x1E7ED..=0x1E7EE | 0x1E7F0..=0x1E7FE | 0x1E800..=0x1E8C4 |
+        0x1E8C7..=0x1E8D6 | 0x1E900..=0x1E94B | 0x1E950..=0x1E959 | 0x1E95E..=0x1E95F | 0x1EC71..=0x1ECB4 |
+        0x1ED01..=0x1ED3D | 0x1EE00..=0x1EE03 | 0x1EE05..=0x1EE1F | 0x1EE21..=0x1EE22 | 0x1EE24..=0x1EE24 |
+        0x1EE27..=0x1EE27 | 0x1EE29..=0x1EE32 | 0x1EE34..=0x1EE37 | 0x1EE39..=0x1EE39 | 0x1EE3B..=0x1EE3B |
+        0x1EE42..=0x1EE42 | 0x1EE47..=0x1EE47 | 0x1EE49..=0x1EE49 | 0x1EE4B..=0x1EE4B | 0x1EE4D..=0x1EE4F |
+        0x1EE51..=0x1EE52 | 0x1EE54..=0x1EE54 | 0x1EE57..=0x1EE57 | 0x1EE59..=0x1EE59 | 0x1EE5B..=0x1EE5B |
+        0x1EE5D..=0x1EE5D | 0x1EE5F..=0x1EE5F | 0x1EE61..=0x1EE62 | 0x1EE64..=0x1EE64 | 0x1EE67..=0x1EE6A |
+        0x1EE6C..=0x1EE72 | 0x1EE74..=0x1EE77 | 0x1EE79..=0x1EE7C | 0x1EE7E..=0x1EE7E | 0x1EE80..=0x1EE89 |
+        0x1EE8B..=0x1EE9B | 0x1EEA1..=0x1EEA3 | 0x1EEA5..=0x1EEA9 | 0x1EEAB..=0x1EEBB | 0x1EEF0..=0x1EEF1 |
+        0x1F000..=0x1F02B | 0x1F030..=0x1F093 | 0x1F0A0..=0x1F0AE | 0x1F0B1..=0x1F0BF | 0x1F0C1..=0x1F0CF |
+        0x1F0D1..=0x1F0F5 | 0x1F100..=0x1F1AD | 0x1F1E6..=0x1F202 | 0x1F210..=0x1F23B | 0x1F240..=0x1F248 |
+        0x1F250..=0x1F251 | 0x1F260..=0x1F265 | 0x1F300..=0x1F6D7 | 0x1F6DC..=0x1F6EC | 0x1F6F0..=0x1F6FC |
+        0x1F700..=0x1F776 | 0x1F77B..=0x1F7D9 | 0x1F7E0..=0x1F7EB | 0x1F7F0..=0x1F7F0 | 0x1F800..=0x1F80B |
+        0x1F810..=0x1F847 | 0x1F850..=0x1F859 | 0x1F860..=0x1F887 | 0x1F890..=0x1F8AD | 0x1F8B0..=0x1F8B1 |
+        0x1F900..=0x1FA53 | 0x1FA60..=0x1FA6D | 0x1FA70..=0x1FA7C | 0x1FA80..=0x1FA88 | 0x1FA90..=0x1FABD |
+        0x1FABF..=0x1FAC5 | 0x1FACE..=0x1FADB | 0x1FAE0..=0x1FAE8 | 0x1FAF0..=0x1FAF8 | 0x1FB00..=0x1FB92 |
+        0x1FB94..=0x1FBCA | 0x1FBF0..=0x1FBF9 | 0x20000..=0x2A6DF | 0x2A700..=0x2B739 | 0x2B740..=0x2B81D |
+        0x2B820..=0x2CEA1 | 0x2CEB0..=0x2EBE0 | 0x2F800..=0x2FA1D | 0x30000..=0x3134A | 0x31350..=0x323AF |
+        0xE0100..=0xE01EF
+    )
+}
+/// Go's `quoteChar` from `encoding/json`: renders the offending byte for
+/// messages such as "invalid character 'G' in \u hexadecimal character escape".
+fn go_quote_char_byte(byte: u8) -> String {
+    if byte == b'\'' {
+        return "'\\''".to_owned();
+    }
+    if byte == b'"' {
+        return "'\"'".to_owned();
+    }
+    let character = char::from(byte);
+    let body = if go_is_print(character) {
+        character.to_string()
+    } else {
+        go_rune_escape(character)
+    };
+    format!("'{body}'")
 }
 
 fn clean_path(path: &str) -> String {
-    let mut result = PathBuf::new();
-    for component in Path::new(path).components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir if result.file_name().is_some() => {
-                result.pop();
+    // Mirrors Go's filepath.Clean (frozen oracle): `..` may pop only segments
+    // past the leading root, or past an already-appended leading `..` prefix.
+    let rooted = path.starts_with('/');
+    let mut segments: Vec<&str> = Vec::new();
+    let mut count = usize::from(rooted);
+    let mut dotdot = count;
+    for segment in path.split('/') {
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        if segment == ".." {
+            if count > dotdot {
+                segments.pop();
+                count -= 1;
+            } else if !rooted {
+                segments.push("..");
+                count += 1;
+                dotdot = count;
             }
-            other => result.push(other.as_os_str()),
+        } else {
+            segments.push(segment);
+            count += 1;
         }
     }
-    if result.as_os_str().is_empty() {
+    if rooted {
+        if segments.is_empty() {
+            "/".to_owned()
+        } else {
+            format!("/{}", segments.join("/"))
+        }
+    } else if segments.is_empty() {
         ".".to_owned()
     } else {
-        result.to_string_lossy().into_owned()
+        segments.join("/")
     }
 }
