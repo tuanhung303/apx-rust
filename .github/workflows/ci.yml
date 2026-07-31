@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  parity:
+    name: Go Oracle Parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: apx-rust
+      - uses: actions/checkout@v4
+        with:
+          repository: tuanhung303/apx
+          ref: bcd85fc2f817e7c405f8b92953cd3ad4db165759
+          path: apx
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: Verify pinned parser fixtures
+        working-directory: apx-rust
+        run: python3 scripts/parity.py --go-repo ../apx verify
+
+  test:
+    name: Test Workspace (Rust ${{ matrix.rust }} on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        rust: [ "1.95.0", "1.97.1" ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+      - name: Run tests
+        run: cargo test --workspace
+
+  lint:
+    name: Formatting & Clippy (Rust 1.97.1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build docs
+        run: cargo doc --workspace --no-deps
+
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Audit
+        uses: rustsec/audit-check@v1.4.1
+        with:
+          token: ${{ github.token }}

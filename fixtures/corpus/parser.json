@@ -1,0 +1,334 @@
+{
+  "go_oracle_revision": "bcd85fc2f817e7c405f8b92953cd3ad4db165759",
+  "cases": [
+    {
+      "name": "in_simple",
+      "script": "in file.txt\n",
+      "expected": {
+        "instructions": [
+          {
+            "line": 1,
+            "operation": "in",
+            "path": "file.txt"
+          }
+        ],
+        "errors": null
+      }
+    },
+    {
+      "name": "new_simple",
+      "script": "new file.txt\n",
+      "expected": {
+        "instructions": [
+          {
+            "line": 1,
+            "operation": "new",
+            "path": "file.txt"
+          }
+        ],
+        "errors": null
+      }
+    },
+    {
+      "name": "mv_simple",
+      "script": "mv file.txt\n",
+      "expected": {
+        "instructions": [
+          {
+            "line": 1,
+            "operation": "mv",
+            "path": "file.txt"
+          }
+        ],
+        "errors": null
+      }
+    },
+    {
+      "name": "rm_simple",
+      "script": "rm file.txt\n",
+      "expected": {
+        "instructions": [
+          {
+            "line": 1,
+            "operation": "rm",
+            "path": "file.txt"
+          }
+        ],
+        "errors": null
+      }
+    },
+    {
+      "name": "rm_no_path",
+      "script": "rm\n",
+      "expected": {
+        "instructions": [
+          {
+            "line": 1,
+            "operation": "rm",
+            "path": ""
+          }
+        ],
+        "errors": null
+      }
+    },
+    {
+      "name": "in_no_space",
+      "script": "in\n",
+      "expected": {
+        "instructions": null,
+        "errors": [
+          {
+            "line": 1,
+            "command": 1,
+            "operation": "in",
+            "category": "syntax",
+            "message": "unknown or malformed command",
+            "diagnostic": "apx: command 1, source line 1, operation \"in\", category syntax: unknown or malformed command\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "new_no_space",
+      "script": "new\n",
+      "expected": {
+        "instructions": null,
+        "errors": [
+          {
+            "line": 1,
+            "command": 1,
+            "operation": "new",
+            "category": "syntax",
+            "message": "unknown or malformed command",
+            "diagnostic": "apx: command 1, source line 1, operation \"new\", category syntax: unknown or malformed command\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "mv_no_space",
+      "script": "mv\n",
+      "expected": {
+        "instructions": null,
+        "errors": [
+          {
+            "line": 1,
+            "command": 1,
+            "operation": "mv",
+            "category": "syntax",
+            "message": "unknown or malformed command",
+            "diagnostic": "apx: command 1, source line 1, operation \"mv\", category syntax: unknown or malformed command\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "in_empty_path",
+      "script": "in \n",
+      "expected": {
+        "instructions": null,
+        "errors": [
+          {
+            "line": 1,
+            "command": 1,
+            "operation": "in",
+            "category": "syntax",
+            "message": "path must not be empty",
+            "diagnostic": "apx: command 1, source line 1, operation \"in\", category syntax: path must not be empty\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "new_empty_path",
+      "script": "new \n",
+      "expected": {
+        "instructions": null,
+        "errors": [
+          {
+            "line": 1,
+            "command": 1,
+            "operation": "new",
+            "category": "syntax",
+            "message": "path must not be empty",
+            "diagnostic": "apx: command 1, source line 1, operation \"new\", category syntax: path must not be empty\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "mv_empty_path",
+      "script": "mv \n",
+      "expected": {
+        "instructions": null,
+        "errors": [
+          {
+            "line": 1,
+            "command": 1,
+            "operation": "mv",
+            "category": "syntax",
+            "message": "path must not be empty",
+            "diagnostic": "apx: command 1, source line 1, operation \"mv\", category syntax: path must not be empty\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "rm_empty_path",
+      "script": "rm \n",
+      "expected": {
+        "instructions": null,
+        "errors": [
+          {
+            "line": 1,
+            "command": 1,
+            "operation": "rm",
+            "category": "syntax",
+            "message": "path must not be empty",
+            "diagnostic": "apx: command 1, source line 1, operation \"rm\", category syntax: path must not be empty\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "path_cleaning",
+      "script": "in a/b/../c/./d\n",
+      "expected": {
+        "instructions": [
+          {
+            "line": 1,
+            "operation": "in",
+            "path": "a/c/d"
+          }
+        ],
+        "errors": null
+      }
+    },
+    {
+      "name": "path_spaces",
+      "script": "in a b.txt\n",
+      "expected": {
+        "instructions": [
+          {
+            "line": 1,
+            "operation": "in",
+            "path": "a b.txt"
+          }
+        ],
+        "errors": null
+      }
+    },
+    {
+      "name": "multiple_commands",
+      "script": "in file.txt\nrm\nnew other.txt\n",
+      "expected": {
+        "instructions": [
+          {
+            "line": 1,
+            "operation": "in",
+            "path": "file.txt"
+          },
+          {
+            "line": 2,
+            "operation": "rm",
+            "path": ""
+          },
+          {
+            "line": 3,
+            "operation": "new",
+            "path": "other.txt"
+          }
+        ],
+        "errors": null
+      }
+    },
+    {
+      "name": "empty_and_whitespace_lines",
+      "script": "\n  \nin file.txt\n\n\t\nrm\n",
+      "expected": {
+        "instructions": [
+          {
+            "line": 3,
+            "operation": "in",
+            "path": "file.txt"
+          },
+          {
+            "line": 6,
+            "operation": "rm",
+            "path": ""
+          }
+        ],
+        "errors": null
+      }
+    },
+    {
+      "name": "unknown_command",
+      "script": "unknown_command\n",
+      "expected": {
+        "instructions": null,
+        "errors": [
+          {
+            "line": 1,
+            "command": 1,
+            "operation": "unknown_command",
+            "category": "syntax",
+            "message": "unknown or malformed command",
+            "diagnostic": "apx: command 1, source line 1, operation \"unknown_command\", category syntax: unknown or malformed command\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "multiple_errors",
+      "script": "in \nunknown_command\nnew \n",
+      "expected": {
+        "instructions": null,
+        "errors": [
+          {
+            "line": 1,
+            "command": 1,
+            "operation": "in",
+            "category": "syntax",
+            "message": "path must not be empty",
+            "diagnostic": "apx: command 1, source line 1, operation \"in\", category syntax: path must not be empty\n"
+          },
+          {
+            "line": 2,
+            "command": 2,
+            "operation": "unknown_command",
+            "category": "syntax",
+            "message": "unknown or malformed command",
+            "diagnostic": "apx: command 2, source line 2, operation \"unknown_command\", category syntax: unknown or malformed command\n"
+          },
+          {
+            "line": 3,
+            "command": 3,
+            "operation": "new",
+            "category": "syntax",
+            "message": "path must not be empty",
+            "diagnostic": "apx: command 3, source line 3, operation \"new\", category syntax: path must not be empty\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "crlf_line_endings",
+      "script": "in file.txt\r\nrm\r\n",
+      "expected": {
+        "instructions": [
+          {
+            "line": 1,
+            "operation": "in",
+            "path": "file.txt"
+          },
+          {
+            "line": 2,
+            "operation": "rm",
+            "path": ""
+          }
+        ],
+        "errors": null
+      }
+    }
+  ]
+}
