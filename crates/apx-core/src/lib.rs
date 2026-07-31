@@ -7,7 +7,7 @@ mod parser;
 mod tool;
 mod translate;
 
-pub use engine::{Baseline, MemoryBaseline, evaluate};
+pub use engine::{Baseline, MemoryBaseline, evaluate, evaluate_peek};
 pub use model::{
     Change, ChangeKind, ChangeSet, CommandError, CommandGroupError, Evaluation, Instruction,
     Operation, Program,

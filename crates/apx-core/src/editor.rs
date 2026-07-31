@@ -166,6 +166,13 @@ impl Editor {
         Ok(())
     }
 
+    pub fn selected_spans(&self) -> Vec<(usize, usize)> {
+        self.selections
+            .iter()
+            .map(|selection| (selection.start, selection.end))
+            .collect()
+    }
+
     pub fn selected_clipboard(&self) -> Option<(String, bool)> {
         self.selections.first().map(|selected| {
             (
@@ -314,7 +321,7 @@ fn conflicts(first: &Edit, second: &Edit) -> bool {
     }
 }
 
-fn logical_lines(text: &str) -> Vec<(usize, usize, usize)> {
+pub(crate) fn logical_lines(text: &str) -> Vec<(usize, usize, usize)> {
     if text.is_empty() {
         return vec![(0, 0, 0)];
     }

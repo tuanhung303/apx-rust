@@ -2,7 +2,7 @@
 //! Compatibility CLI: apply/translate/gain, mirroring the frozen Go oracle's
 //! command-line contract (`apx [--root ROOT] [--cwd CWD] < SCRIPT`).
 
-use apx_core::{evaluate, parse, Instruction, Operation, Program};
+use apx_core::{evaluate, evaluate_peek, parse, Instruction, Operation, Program};
 use apx_local::{apply, canonicalize_root, resolve_paths, FsBaseline};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -12,6 +12,8 @@ mod gain;
 const HELP_TEXT: &str = r#"Usage:
   apx [--root ROOT] [--cwd CWD] < SCRIPT
   apx translate [--root ROOT] [--cwd CWD] < SCRIPT
+  apx check [--root ROOT] [--cwd CWD] < SCRIPT
+  apx peek [--root ROOT] [--cwd CWD] < SCRIPT
   apx gain
   apx --help
   apx translate --help
@@ -69,6 +71,25 @@ Baseline editor state:
 Metrics:
   apx gain reads no script and reports the router/metrics view when available.
 
+Read-only modes:
+  apx check validates the complete script exactly like a normal run but never
+  touches files and never prints the patch envelope: success is one short
+  stdout line (ok N edits across M files), failures are the usual diagnostics.
+  Use check, never translate, to validate a script before applying it.
+
+  apx peek is read-only file viewing through selectors. Its script may contain
+  only in/sel/tsel/bsel/rsel; after each selector it prints just the selected
+  lines with one-based line numbers to stdout. Use it instead of cat/nl on
+  whole files to read exactly the regions you plan to edit.
+
+Agent workflow:
+  1. Peek first: read only the regions you will edit (apx peek, or
+     nl -ba FILE | sed -n 'A,Bp'), never whole files.
+  2. Batch: group every edit for the task into one script, across as many
+     files as needed; never split one file's edits across invocations. A
+     script is atomic, so batching is safe.
+  3. Validate cheaply with apx check, then apply once.
+
 Paths:
   --root selects the trusted workspace boundary and defaults to apx's current
   directory. --cwd selects an existing directory within that root and defaults
@@ -90,6 +111,25 @@ Attach SCRIPT through the execution interface's native non-PTY stdin field.
 Do not use Python, printf, an encoding helper, a shell pipeline, or any
 wrapper around apx translate. Run apx --help for the complete editing and
 agent workflow.
+"#;
+
+const CHECK_HELP: &str = r#"Usage:
+  apx check [--root ROOT] [--cwd CWD] < SCRIPT
+
+Validate a complete editing script exactly like a normal run, without
+modifying any file and without printing the apply_patch envelope. Success
+writes one short line to stdout (ok N edits across M files); failures use
+stderr and nonzero status. Prefer check over translate for validation.
+"#;
+
+const PEEK_HELP: &str = r#"Usage:
+  apx peek [--root ROOT] [--cwd CWD] < SCRIPT
+
+Read-only file viewing through selectors. The script may contain only
+in/sel/tsel/bsel/rsel. After each selector command, peek prints just the
+selected lines with one-based line numbers to stdout. It never modifies
+files. Use it to read exactly the regions you plan to edit instead of
+printing whole files.
 "#;
 
 fn main() {
@@ -115,6 +155,14 @@ fn dispatch_informational(args: &[String]) -> Option<i32> {
         }
         [a, b] if a == "translate" && b == "--help" => {
             print!("{TRANSLATE_HELP}");
+            Some(0)
+        }
+        [a, b] if a == "check" && b == "--help" => {
+            print!("{CHECK_HELP}");
+            Some(0)
+        }
+        [a, b] if a == "peek" && b == "--help" => {
+            print!("{PEEK_HELP}");
             Some(0)
         }
         [flag] if flag == "--tool-help" => {
@@ -188,6 +236,20 @@ fn run(args: &[String], script: &str) -> i32 {
     };
 
     let baseline = FsBaseline::new(canonical_root.clone());
+
+    if invocation.mode == Mode::Peek {
+        return match evaluate_peek(&baseline, &program) {
+            Ok(output) => {
+                print!("{output}");
+                0
+            }
+            Err(error) => {
+                eprint!("{}", error.diagnostic());
+                1
+            }
+        };
+    }
+
     let evaluation = match evaluate(&baseline, &program) {
         Ok(evaluation) => evaluation,
         Err(error) => {
@@ -196,7 +258,27 @@ fn run(args: &[String], script: &str) -> i32 {
         }
     };
 
-    if invocation.translate {
+    if invocation.mode == Mode::Check {
+        let edits = program
+            .instructions
+            .iter()
+            .filter(|instruction| {
+                matches!(
+                    instruction.operation,
+                    Operation::Type { .. } | Operation::Delete | Operation::Cut | Operation::Paste
+                )
+            })
+            .count();
+        let files = evaluation.changes.changes.len();
+        println!(
+            "ok {edits} edit{} across {files} file{}",
+            if edits == 1 { "" } else { "s" },
+            if files == 1 { "" } else { "s" },
+        );
+        return 0;
+    }
+
+    if invocation.mode == Mode::Translate {
         return match apx_core::translate_apply_patch(&evaluation.changes) {
             Ok(patch) => {
                 print!("{patch}");
@@ -226,18 +308,39 @@ fn run(args: &[String], script: &str) -> i32 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Apply,
+    Translate,
+    Check,
+    Peek,
+}
+
 struct Invocation {
-    translate: bool,
+    mode: Mode,
     root: Option<String>,
     cwd: Option<String>,
 }
 
 fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
-    let mut translate = false;
+    let mut mode = Mode::Apply;
     let mut rest = args;
-    if rest.first().map(String::as_str) == Some("translate") {
-        translate = true;
-        rest = &rest[1..];
+    if let Some(first) = rest.first().map(String::as_str) {
+        match first {
+            "translate" => {
+                mode = Mode::Translate;
+                rest = &rest[1..];
+            }
+            "check" => {
+                mode = Mode::Check;
+                rest = &rest[1..];
+            }
+            "peek" => {
+                mode = Mode::Peek;
+                rest = &rest[1..];
+            }
+            _ => {}
+        }
     }
     let mut root = None;
     let mut cwd = None;
@@ -246,7 +349,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         let flag = rest[index].as_str();
         if index + 1 >= rest.len() || (flag != "--root" && flag != "--cwd") {
             return Err(
-                "expected no arguments or exactly: [--root ROOT] [--cwd CWD], translate [--root ROOT] [--cwd CWD], or gain"
+                "expected no arguments or exactly: [--root ROOT] [--cwd CWD], translate [--root ROOT] [--cwd CWD], check [--root ROOT] [--cwd CWD], peek [--root ROOT] [--cwd CWD], or gain"
                     .to_owned(),
             );
         }
@@ -271,7 +374,7 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
         }
         index += 2;
     }
-    Ok(Invocation { translate, root, cwd })
+    Ok(Invocation { mode, root, cwd })
 }
 
 fn resolve_cwd(canonical_root: &Path, cwd: &str) -> Result<String, String> {

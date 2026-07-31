@@ -133,3 +133,82 @@ The graders were validated against iter3 before use (reproduced iter3 A-apx: 5 c
 - iter2 (explicit tool naming) / iter3 (blind) baselines: see the Go oracle repo,
   `apx/doc/benchmarks/BENCHMARK.md`.
 - iter4 (this doc): Rust CLI + selector-economy rule enforced at instruction level.
+
+## w3 + w4 — tuned tool surface (peek/check) and instruction rules
+
+After iter4, the CLI gained two read-only modes designed to cut conversational
+tokens (`apx peek` — selector-scoped file reads with line numbers; `apx check` —
+validate-only, one-line success output, no patch-envelope echo), and the
+instruction file gained batching, reading-economy, scratch-ban, and
+check-not-translate rules (tuned by an OpenCode Kimi K3 pass; backups
+`~/.codex/apx-instructions.iter4-w2.md` / `.iter5-pre.md` / `.iter5-w3.md`).
+All changes additive: `cargo test --workspace` green (11/11 engine tests incl.
+5 new peek tests), clippy clean, apply output byte-identical to the Go oracle.
+
+Wave results (deepseek-v4-flash low, same exercises):
+
+| Wave | Round | apx | apply_patch |
+|---|---|---|---|
+| w3 | A (Go) | 17/18 (A6) | 17/18 (A6) |
+| w3 | B (Python) | 15/15 | 15/15 |
+| w4 (clean B re-run) | B (Python) | 15/15 | 15/15 |
+
+Tool-usage, clean arms only (w3c A + w4 B; w3 B arms invalidated — see below):
+
+| Metric | apx (2 sessions) | apply_patch (2 sessions) | Δ |
+|---|---|---|---|
+| Accuracy (applicable) | 32/33 | 32/33 | parity |
+| Edit invocations avg | 5.5 | 1.0 | +4.5 |
+| Edit payload avg (chars) | 17,577 | 8,006 | +120% |
+| Session input tokens avg | 3,436,979 | 895,901 | +284% |
+| Session output tokens avg | 41,090 | 11,665 | +252% |
+| `translate` dry-runs | 0 | 0 | — |
+| Scratch-dir experiments | 0 | 0 | — |
+
+Per-arm (chars / calls):
+
+| Arm | apx | apply_patch |
+|---|---|---|
+| w3c A | 14,039 / 5 heredocs (2 peek, 1 check, 3 apply incl. one 6.7 KB batched script) | 5,574 / 1 |
+| w4 B | 21,115 / 5 heredocs (3 check, 2 apply) | 10,438 / 1 |
+
+### What the tuning changed
+
+- Behavior improved: blind apx arms adopted `peek` (region reads instead of
+  `cat`), `check` (zero `translate` dry-runs after w1), and the scratch-ban held
+  (zero /tmp experiment dirs in w3c/w4, vs 5 scratch calls in w3).
+- Batching landed partially: w3c-a-apx applied the core refactor in one 6.7 KB
+  script (check + apply as a pair); w4-b-apx re-emitted the same ~5.4 KB script
+  across 3 `check` iterations before applying.
+- The token gap did NOT close. apx sessions still cost ~2.5–3× the
+  apply_patch control in session tokens: each additional call is a full
+  round-trip (reasoning + context re-send), and check-loop script re-emission
+  dominates the payload (w4 B: 16,126 of 21,115 chars were check re-runs).
+- Low-effort model variance is large: per-cell deltas between waves (e.g.
+  w2-b-apx 7,158 vs w4-b-apx 21,115 chars on the same exercise) exceed the
+  tool-level signal. Headline conclusions should come from the multi-wave
+  pattern, not any single arm.
+
+### Invalidated waves
+
+- **w3b** — task-path double-replace bug sent all four agents to `w3bb-*`
+  paths; agents self-corrected into visible directories and browsed previous
+  answers. Not counted.
+- **w3 B arms** — agents read completed answers (`w1-b-apx/store/ledger.py`),
+  the grader rubric, and (patch arm) invoked the raw `apply_patch` binary via
+  exec. Not counted. Environment fixed by archiving every fixture, seed, and
+  grader outside the repo (`~/.apx-bench-archive/iter4/`) before w4.
+
+### Standing conclusions after 5 waves (w1, w2, w3, w3c, w4)
+
+1. **Accuracy parity is stable.** Every wave ends at parity within one
+   variance flip; A6 is task-bound and fails both tools in every A round.
+2. **apx has not beaten apply_patch on session tokens in any wave.** The
+   iter4 edit-payload advantage (−7.4%) is real but small; the conversational
+   cost of more, smaller calls (+43–250% out tokens depending on wave) erases
+   it. The tool is accuracy-safe and payload-lean, but "token reduction" is
+   not yet demonstrated in a controlled blind benchmark.
+3. **The next lever is check-loop re-emission and call overhead**, not
+   selector economy: make failed-`check` iteration cheap (e.g. shorter
+   re-send, or a surface that lets the model amend the last script), and cut
+   per-call round trips (one script per task, including reads).

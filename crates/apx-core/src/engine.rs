@@ -1,4 +1,4 @@
-use crate::editor::Editor;
+use crate::editor::{Editor, logical_lines};
 use crate::{Change, ChangeKind, ChangeSet, CommandError, Evaluation, Operation, Program};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -342,5 +342,112 @@ fn category(operation: &Operation) -> &'static str {
         | Operation::Cut
         | Operation::Paste => "edit",
         Operation::Commit => "state",
+    }
+}
+
+/// Read-only evaluation for `apx peek`: executes only `in` and the selector
+/// commands, printing the selected lines with one-based line numbers. Any
+/// edit or file-mutation command is rejected; nothing is ever written.
+pub fn evaluate_peek<B: Baseline>(baseline: &B, program: &Program) -> Result<String, CommandError> {
+    let mut distinct_paths: Vec<&str> = Vec::new();
+    for instruction in &program.instructions {
+        if let Operation::In { path } = &instruction.operation
+            && !distinct_paths.contains(&path.as_str())
+        {
+            distinct_paths.push(path);
+        }
+    }
+    let headers = distinct_paths.len() > 1;
+
+    struct Active {
+        content: String,
+        editor: Editor,
+    }
+
+    let mut output = String::new();
+    let mut active: Option<Active> = None;
+    for (index, instruction) in program.instructions.iter().enumerate() {
+        let failure = |message: String| CommandError {
+            command: index + 1,
+            line: instruction.line,
+            operation: instruction.operation.name().to_owned(),
+            category: category(&instruction.operation).to_owned(),
+            message,
+        };
+        match &instruction.operation {
+            Operation::In { path } => {
+                let content = baseline
+                    .read(path)
+                    .map_err(failure)?
+                    .ok_or_else(|| failure(format!("{path} does not exist")))?;
+                if headers {
+                    output.push_str(&format!("==> {path} <==\n"));
+                }
+                active = Some(Active {
+                    editor: Editor::new(content.clone()),
+                    content,
+                });
+            }
+            Operation::Select { line, start, end } => {
+                let active = active
+                    .as_mut()
+                    .ok_or_else(|| failure("sel requires an active file".to_owned()))?;
+                active
+                    .editor
+                    .select_columns(*line, *start, *end)
+                    .map_err(failure)?;
+                render_selection(&mut output, &active.content, &active.editor.selected_spans());
+            }
+            Operation::TextSelect { line, text, count } => {
+                let active = active
+                    .as_mut()
+                    .ok_or_else(|| failure("tsel requires an active file".to_owned()))?;
+                active
+                    .editor
+                    .select_matches(*line, text, *count)
+                    .map_err(failure)?;
+                render_selection(&mut output, &active.content, &active.editor.selected_spans());
+            }
+            Operation::BlockSelect { start, end } => {
+                let active = active
+                    .as_mut()
+                    .ok_or_else(|| failure("bsel requires an active file".to_owned()))?;
+                active
+                    .editor
+                    .select_block(start, end)
+                    .map_err(failure)?;
+                render_selection(&mut output, &active.content, &active.editor.selected_spans());
+            }
+            Operation::RangeSelect { start, end } => {
+                let active = active
+                    .as_mut()
+                    .ok_or_else(|| failure("rsel requires an active file".to_owned()))?;
+                active
+                    .editor
+                    .select_lines(*start, *end)
+                    .map_err(failure)?;
+                render_selection(&mut output, &active.content, &active.editor.selected_spans());
+            }
+            other => {
+                return Err(failure(format!(
+                    "peek is read-only and supports only in, sel, tsel, bsel, and rsel; got {}",
+                    other.name()
+                )));
+            }
+        }
+    }
+    Ok(output)
+}
+
+fn render_selection(output: &mut String, content: &str, spans: &[(usize, usize)]) {
+    let lines = logical_lines(content);
+    let mut rendered: Vec<usize> = Vec::new();
+    for &(start, end) in spans {
+        for (index, &(line_start, content_end, full_end)) in lines.iter().enumerate() {
+            if line_start < end && full_end > start && !rendered.contains(&index) {
+                rendered.push(index);
+                output.push_str(&format!("{:>6}\t{}\n", index + 1, &content[line_start..content_end]));
+            }
+        }
     }
 }
