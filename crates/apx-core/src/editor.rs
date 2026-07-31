@@ -62,9 +62,13 @@ impl Editor {
 
     pub fn select_columns(&mut self, line: usize, start: usize, end: usize) -> Result<(), String> {
         let lines = logical_lines(&self.baseline);
-        let selected = lines
-            .get(line - 1)
-            .ok_or_else(|| format!("line {line} is outside the file"))?;
+        let visible = visible_line_count(&self.baseline, &lines);
+        let selected = lines.get(line - 1).ok_or_else(|| {
+            format!(
+                "line {line} is outside the file; file has {} lines",
+                visible
+            )
+        })?;
         let content = &self.baseline[selected.0..selected.1];
         let offsets: Vec<usize> = content
             .char_indices()
@@ -72,7 +76,10 @@ impl Editor {
             .chain(std::iter::once(content.len()))
             .collect();
         if start == 0 || end == 0 || start > offsets.len() || end > offsets.len() {
-            return Err(format!("columns {start}:{end} are outside line {line}"));
+            return Err(format!(
+                "columns {start}:{end} are outside line {line} (line has {} characters)",
+                offsets.len() - 1
+            ));
         }
         self.set_selections(vec![Selection {
             start: selected.0 + offsets[start - 1],
@@ -83,15 +90,19 @@ impl Editor {
 
     pub fn select_matches(&mut self, line: usize, text: &str, count: usize) -> Result<(), String> {
         let lines = logical_lines(&self.baseline);
-        let start = lines
-            .get(line - 1)
-            .map(|item| item.0)
-            .ok_or_else(|| format!("line {line} is outside the file"))?;
+        let visible = visible_line_count(&self.baseline, &lines);
+        let start = lines.get(line - 1).map(|item| item.0).ok_or_else(|| {
+            format!(
+                "line {line} is outside the file; file has {} lines",
+                visible
+            )
+        })?;
         let offsets = non_overlapping_offsets(&self.baseline[start..], text, count);
         if offsets.len() != count {
             return Err(format!(
-                "found {} of {count} requested matches of {text:?} at or after line {line}",
-                offsets.len()
+                "found {} of {count} requested matches of {text:?} at or after line {line}; file has {} lines",
+                offsets.len(),
+                visible
             ));
         }
         self.set_selections(
@@ -139,8 +150,12 @@ impl Editor {
 
     pub fn select_lines(&mut self, start: usize, end: usize) -> Result<(), String> {
         let lines = logical_lines(&self.baseline);
+        let visible = visible_line_count(&self.baseline, &lines);
         if start == 0 || end > lines.len() {
-            return Err(format!("line range {start}:{end} is outside the file"));
+            return Err(format!(
+                "line range {start}:{end} is outside the file; file has {} lines",
+                visible
+            ));
         }
         self.set_selections(vec![Selection {
             start: lines[start - 1].0,
@@ -343,6 +358,14 @@ pub(crate) fn logical_lines(text: &str) -> Vec<(usize, usize, usize)> {
         lines.push((start, start, start));
     }
     lines
+}
+/// Count of lines the agent can see when peeking: logical lines minus the
+/// synthetic trailing empty segment after a final newline (empty file = 0).
+pub(crate) fn visible_line_count(text: &str, lines: &[(usize, usize, usize)]) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    lines.len() - usize::from(text.ends_with('\n'))
 }
 
 fn non_overlapping_offsets(text: &str, literal: &str, limit: usize) -> Vec<usize> {

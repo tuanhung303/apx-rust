@@ -336,3 +336,43 @@ fn bsel_anchors_with_escaped_quotes_and_unicode() {
     let result = evaluate(&files, &program).unwrap();
     assert_eq!(result.changes.changes[0].content, "REPLACED\n");
 }
+
+#[test]
+fn range_errors_report_the_real_file_size() {
+    let files = baseline(&[("a.txt", "one\ntwo\nthree\n")]);
+    let rsel = parse("in a.txt\nrsel 2:9\n").unwrap();
+    let error = evaluate(&files, &rsel).unwrap_err();
+    assert!(error.message.contains("line range 2:9 is outside the file"));
+    assert!(
+        error.message.contains("file has 3 lines"),
+        "{}",
+        error.message
+    );
+
+    let tsel = parse("in a.txt\ntsel 9 \"two\"\n").unwrap();
+    let error = evaluate(&files, &tsel).unwrap_err();
+    assert!(error.message.contains("line 9 is outside the file"));
+    assert!(
+        error.message.contains("file has 3 lines"),
+        "{}",
+        error.message
+    );
+
+    let sel = parse("in a.txt\nsel 1 1:99\n").unwrap();
+    let error = evaluate(&files, &sel).unwrap_err();
+    assert!(error.message.contains("columns 1:99 are outside line 1"));
+    assert!(
+        error.message.contains("line has 3 characters"),
+        "{}",
+        error.message
+    );
+
+    let miss = parse("in a.txt\ntsel 1 \"zzz\"\n").unwrap();
+    let error = evaluate(&files, &miss).unwrap_err();
+    assert!(error.message.contains("found 0 of 1 requested matches"));
+    assert!(
+        error.message.contains("file has 3 lines"),
+        "{}",
+        error.message
+    );
+}
