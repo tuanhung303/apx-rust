@@ -213,7 +213,7 @@ fn run(args: &[String], script: &str) -> i32 {
             return 1;
         }
     };
-    let cwd = match resolve_cwd(&canonical_root, invocation.cwd.as_deref().unwrap_or(".")) {
+    let cwd = match resolve_cwd(&canonical_root, &alias, invocation.cwd.as_deref().unwrap_or(".")) {
         Ok(cwd) => cwd,
         Err(message) => {
             eprintln!("apx: {message}");
@@ -377,14 +377,16 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     Ok(Invocation { mode, root, cwd })
 }
 
-fn resolve_cwd(canonical_root: &Path, cwd: &str) -> Result<String, String> {
+fn resolve_cwd(canonical_root: &Path, alias: &Path, cwd: &str) -> Result<String, String> {
     let relative = if cwd.starts_with('/') {
-        let stripped = strip_absolute_prefix(cwd, canonical_root);
+        let stripped = apx_local::strip_root_prefix(cwd, canonical_root)
+            .or_else(|| apx_local::strip_root_prefix(cwd, alias));
         match stripped {
             Some(relative) if !relative.is_empty() => relative,
             Some(_) => ".".to_owned(),
             None => return Err("workspace cwd must resolve within root".to_owned()),
         }
+
     } else {
         let cleaned = apx_core::clean_path(cwd);
         if cleaned == ".." || cleaned.starts_with("../") {
@@ -401,26 +403,6 @@ fn resolve_cwd(canonical_root: &Path, cwd: &str) -> Result<String, String> {
     Ok(if relative.is_empty() { ".".to_owned() } else { relative })
 }
 
-fn strip_absolute_prefix(path: &str, root: &Path) -> Option<String> {
-    let cleaned = apx_core::clean_path(path);
-    let mut components = cleaned.split('/').peekable();
-    let mut root_components = root.components();
-    loop {
-        match (components.peek(), root_components.next()) {
-            (Some(&part), Some(component)) => {
-                if part != component.as_os_str().to_str().unwrap_or("") {
-                    return None;
-                }
-                components.next();
-            }
-            (Some(_), None) => {
-                return Some(components.collect::<Vec<_>>().join("/"));
-            }
-            (None, Some(_)) => return None,
-            (None, None) => return Some(String::new()),
-        }
-    }
-}
 
 fn fail_commands(errors: &[apx_core::CommandError]) -> i32 {
     for error in errors {

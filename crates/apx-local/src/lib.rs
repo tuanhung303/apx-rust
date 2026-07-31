@@ -76,14 +76,25 @@ fn resolve_path(path: &str, canonical_root: &Path, alias: &Path, cwd: &str) -> R
     Ok(relative)
 }
 
-fn strip_root_prefix(path: &str, root: &Path) -> Option<String> {
+/// Strip `root`'s cleaned prefix from a cleaned absolute path, returning the
+/// root-relative remainder, or `None` when `path` is not under `root`.
+/// Both sides are compared via `clean_path`, so the leading root component is
+/// never confused with `Path::components()`'s `RootDir` entry.
+pub fn strip_root_prefix(path: &str, root: &Path) -> Option<String> {
     let cleaned = apx_core::clean_path(path);
-    let mut path_components = cleaned.split('/').peekable();
-    let mut root_components = root.components();
+    let root_cleaned = apx_core::clean_path(&root.to_string_lossy());
+    let mut path_components = cleaned
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .peekable();
+    let mut root_components = root_cleaned
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .peekable();
     loop {
         match (path_components.peek(), root_components.next()) {
             (Some(&part), Some(component)) => {
-                if part != component.as_os_str().to_str().unwrap_or("") {
+                if part != component {
                     return None;
                 }
                 path_components.next();
@@ -505,8 +516,25 @@ mod tests {
         assert!(resolve_paths(program, &root, &alias, "x").is_err());
     }
 
+
+    #[test]
+    fn strip_root_prefix_matches_absolute_paths() {
+        let root = PathBuf::from("/tmp/apx-root");
+        assert_eq!(
+            strip_root_prefix("/tmp/apx-root", &root),
+            Some(String::new())
+        );
+        assert_eq!(
+            strip_root_prefix("/tmp/apx-root/sub/file.go", &root),
+            Some("sub/file.go".to_owned())
+        );
+        assert_eq!(strip_root_prefix("/tmp/apx-rooted", &root), None);
+        assert_eq!(strip_root_prefix("/tmp/other", &root), None);
+    }
+
     #[test]
     fn apply_update_and_add_transactionally() {
+
         let dir = scratch("apply");
         fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
         let changes = ChangeSet {

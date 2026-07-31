@@ -3,5 +3,6 @@ resolver = "2"
 members = [
     "crates/apx-core",
     "crates/apx-local",
-    "crates/apx-cli"
+    "crates/apx-cli",
+    "crates/apx-mcp"
 ]

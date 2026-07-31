@@ -317,7 +317,34 @@ Gate:
 - Go and Rust agree on final bytes, reports, diagnostics, and translated patch
   for the frozen and randomized corpus.
 
+### Phase 5.5: Register APX as an MCP tool (interim)
+
+Deliverables:
+
+- Add `crates/apx-mcp`: a minimal stdio MCP server exposing one `apx` tool whose
+  `inputSchema` carries `script` (required) plus optional `root`/`cwd`. The
+  server calls `parse`/`evaluate`/`apply` from `apx-core` + `apx-local`
+  in-process, mirroring the CLI apply flow exactly.
+- Keep the tool description diff-only ("like apply_patch, but takes an APX diff
+  script"); the full grammar stays available via `apx --tool-help`.
+- Register the server under `[mcp_servers.apx]` on the stock-Codex benchmark
+  surface (`~/.codex/deepseek.config.toml`); do not register it in the apx-fork
+  default config, where the fork already injects its own tool.
+
+Gate:
+
+- A stock `codex` MCP client lists the `apx` tool from the schema with no
+  instruction-file steering.
+- Blind sessions call the tool on first edit: zero `--tool-help` reads, zero
+  crate spelunking, zero check loops.
+- Accuracy stays at apply_patch parity and session tokens stop exceeding the
+  apply_patch control by the iter4 margin.
+
+This path is the interim surface until Phase 6 lands: it pays a per-call
+process boundary and is superseded by the in-process freeform extension.
+
 ### Phase 6: Add serverless Codex MVP
+
 
 Deliverables:
 
