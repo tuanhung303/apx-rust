@@ -53,7 +53,12 @@ pub fn resolve_paths(
     Ok(Program { instructions })
 }
 
-fn resolve_path(path: &str, canonical_root: &Path, alias: &Path, cwd: &str) -> Result<String, String> {
+fn resolve_path(
+    path: &str,
+    canonical_root: &Path,
+    alias: &Path,
+    cwd: &str,
+) -> Result<String, String> {
     let relative = if path.starts_with('/') {
         strip_root_prefix(path, canonical_root)
             .or_else(|| strip_root_prefix(path, alias))
@@ -127,7 +132,9 @@ impl FsBaseline {
     fn resolve(&self, path: &str) -> Result<PathBuf, String> {
         let target = lexical_clean(&self.root.join(path));
         if !target.starts_with(&self.root) {
-            return Err(format!("reading {path}: path resolves outside workspace root"));
+            return Err(format!(
+                "reading {path}: path resolves outside workspace root"
+            ));
         }
         Ok(target)
     }
@@ -142,17 +149,18 @@ impl Baseline for FsBaseline {
             Err(error) => return Err(format!("reading {path}: {error}")),
         };
         if metadata.file_type().is_symlink() {
-            let canonical = fs::canonicalize(&target)
-                .map_err(|error| format!("reading {path}: {error}"))?;
+            let canonical =
+                fs::canonicalize(&target).map_err(|error| format!("reading {path}: {error}"))?;
             if !canonical.starts_with(&self.root) {
-                return Err(format!("reading {path}: path resolves outside workspace root"));
+                return Err(format!(
+                    "reading {path}: path resolves outside workspace root"
+                ));
             }
         }
         if !metadata.is_file() {
             return Err(format!("reading {path}: not a regular file"));
         }
-        let bytes =
-            fs::read(&target).map_err(|error| format!("reading {path}: {error}"))?;
+        let bytes = fs::read(&target).map_err(|error| format!("reading {path}: {error}"))?;
         String::from_utf8(bytes)
             .map(Some)
             .map_err(|_| format!("reading {path}: not UTF-8"))
@@ -171,7 +179,6 @@ struct Staged {
 /// install outputs, then delete backups. Any failure rolls back to the exact
 /// pre-call state and reports an error naming the failing action.
 pub fn apply(root: &Path, changes: &ChangeSet) -> Result<(), String> {
-
     let mut staged: Vec<Staged> = Vec::with_capacity(changes.changes.len());
     let mut created_dirs: Vec<PathBuf> = Vec::new();
 
@@ -180,7 +187,9 @@ pub fn apply(root: &Path, changes: &ChangeSet) -> Result<(), String> {
             ChangeKind::Add => {
                 let path = join_checked(root, change.path.as_deref().unwrap_or_default())?;
                 ensure_no_symlink_final(&path)?;
-                let parent = path.parent().ok_or_else(|| "new path has no parent".to_owned())?;
+                let parent = path
+                    .parent()
+                    .ok_or_else(|| "new path has no parent".to_owned())?;
                 if !parent.starts_with(root) {
                     return Err("path resolves outside workspace root".to_owned());
                 }
@@ -195,10 +204,15 @@ pub fn apply(root: &Path, changes: &ChangeSet) -> Result<(), String> {
                 });
             }
             ChangeKind::Update | ChangeKind::Move => {
-                let original = join_checked(root, change.original_path.as_deref().unwrap_or_default())?;
+                let original =
+                    join_checked(root, change.original_path.as_deref().unwrap_or_default())?;
                 ensure_no_symlink_final(&original)?;
-                let original_bytes = fs::read(&original)
-                    .map_err(|error| format!("changing {}: {error}", change.original_path.as_deref().unwrap_or_default()))?;
+                let original_bytes = fs::read(&original).map_err(|error| {
+                    format!(
+                        "changing {}: {error}",
+                        change.original_path.as_deref().unwrap_or_default()
+                    )
+                })?;
                 let expected = change.original.as_bytes();
                 if original_bytes != expected {
                     return Err(format!(
@@ -210,8 +224,12 @@ pub fn apply(root: &Path, changes: &ChangeSet) -> Result<(), String> {
                     .parent()
                     .ok_or_else(|| "original path has no parent".to_owned())?;
                 let backup = unique_temp_name(parent, "backup");
-                fs::copy(&original, &backup)
-                    .map_err(|error| format!("backing up {}: {error}", change.original_path.as_deref().unwrap_or_default()))?;
+                fs::copy(&original, &backup).map_err(|error| {
+                    format!(
+                        "backing up {}: {error}",
+                        change.original_path.as_deref().unwrap_or_default()
+                    )
+                })?;
                 let target = join_checked(root, change.path.as_deref().unwrap_or_default())?;
                 ensure_no_symlink_final(&target)?;
                 let target_parent = target
@@ -228,14 +246,19 @@ pub fn apply(root: &Path, changes: &ChangeSet) -> Result<(), String> {
                 });
             }
             ChangeKind::Delete => {
-                let original = join_checked(root, change.original_path.as_deref().unwrap_or_default())?;
+                let original =
+                    join_checked(root, change.original_path.as_deref().unwrap_or_default())?;
                 ensure_no_symlink_final(&original)?;
                 let parent = original
                     .parent()
                     .ok_or_else(|| "original path has no parent".to_owned())?;
                 let backup = unique_temp_name(parent, "backup");
-                fs::copy(&original, &backup)
-                    .map_err(|error| format!("backing up {}: {error}", change.original_path.as_deref().unwrap_or_default()))?;
+                fs::copy(&original, &backup).map_err(|error| {
+                    format!(
+                        "backing up {}: {error}",
+                        change.original_path.as_deref().unwrap_or_default()
+                    )
+                })?;
                 staged.push(Staged {
                     change: change.clone(),
                     temp: None,
@@ -251,9 +274,20 @@ pub fn apply(root: &Path, changes: &ChangeSet) -> Result<(), String> {
         if staged[index].change.kind == ChangeKind::Add {
             continue;
         }
-        let original = join_checked(root, staged[index].change.original_path.as_deref().unwrap_or_default())
-            .map_err(|error| fail_apply(&staged, root, &created_dirs, "backing up", error))?;
-        let backup = staged[index].backup.as_ref().expect("non-add change has backup").clone();
+        let original = join_checked(
+            root,
+            staged[index]
+                .change
+                .original_path
+                .as_deref()
+                .unwrap_or_default(),
+        )
+        .map_err(|error| fail_apply(&staged, root, &created_dirs, "backing up", error))?;
+        let backup = staged[index]
+            .backup
+            .as_ref()
+            .expect("non-add change has backup")
+            .clone();
         if let Err(error) = fs::rename(&original, &backup) {
             return Err(fail_apply(
                 &staged,
@@ -270,9 +304,16 @@ pub fn apply(root: &Path, changes: &ChangeSet) -> Result<(), String> {
         if staged[index].change.kind == ChangeKind::Delete {
             continue;
         }
-        let target = join_checked(root, staged[index].change.path.as_deref().unwrap_or_default())
-            .map_err(|error| fail_apply(&staged, root, &created_dirs, "installing", error))?;
-        let temp = staged[index].temp.as_ref().expect("non-delete change has temp").clone();
+        let target = join_checked(
+            root,
+            staged[index].change.path.as_deref().unwrap_or_default(),
+        )
+        .map_err(|error| fail_apply(&staged, root, &created_dirs, "installing", error))?;
+        let temp = staged[index]
+            .temp
+            .as_ref()
+            .expect("non-delete change has temp")
+            .clone();
         if let Err(error) = fs::rename(&temp, &target) {
             return Err(fail_apply(
                 &staged,
@@ -361,8 +402,12 @@ fn create_parents(parent: &Path, created: &mut Vec<PathBuf>) -> Result<(), Strin
 
 fn write_temp(directory: &Path, content: &str) -> Result<PathBuf, String> {
     let name = unique_temp_name(directory, "stage");
-    let mut file = fs::File::create(&name)
-        .map_err(|error| format!("creating temporary file in {}: {error}", directory.display()))?;
+    let mut file = fs::File::create(&name).map_err(|error| {
+        format!(
+            "creating temporary file in {}: {error}",
+            directory.display()
+        )
+    })?;
     file.write_all(content.as_bytes())
         .map_err(|error| format!("writing temporary file: {error}"))?;
     file.sync_all()
@@ -406,7 +451,10 @@ fn rollback(staged: &[Staged], root: &Path) -> Result<(), String> {
         if item.backed_up
             && let Some(backup) = &item.backup
         {
-            let original = join_checked(root, item.change.original_path.as_deref().unwrap_or_default());
+            let original = join_checked(
+                root,
+                item.change.original_path.as_deref().unwrap_or_default(),
+            );
             if let Ok(original) = original
                 && let Err(error) = fs::rename(backup, original)
             {
@@ -474,7 +522,8 @@ mod tests {
     use std::fs;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("apx-local-test-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("apx-local-test-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -516,7 +565,6 @@ mod tests {
         assert!(resolve_paths(program, &root, &alias, "x").is_err());
     }
 
-
     #[test]
     fn strip_root_prefix_matches_absolute_paths() {
         let root = PathBuf::from("/tmp/apx-root");
@@ -534,7 +582,6 @@ mod tests {
 
     #[test]
     fn apply_update_and_add_transactionally() {
-
         let dir = scratch("apply");
         fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
         let changes = ChangeSet {
@@ -556,8 +603,14 @@ mod tests {
             ],
         };
         apply(&dir, &changes).unwrap();
-        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "one\nthree\n");
-        assert_eq!(fs::read_to_string(dir.join("nested/b.txt")).unwrap(), "hello\n");
+        assert_eq!(
+            fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\nthree\n"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("nested/b.txt")).unwrap(),
+            "hello\n"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -576,7 +629,10 @@ mod tests {
         };
         apply(&dir, &changes).unwrap();
         assert!(!dir.join("old.txt").exists());
-        assert_eq!(fs::read_to_string(dir.join("sub/new.txt")).unwrap(), "payload\n");
+        assert_eq!(
+            fs::read_to_string(dir.join("sub/new.txt")).unwrap(),
+            "payload\n"
+        );
         fs::remove_dir_all(&dir).unwrap();
     }
 

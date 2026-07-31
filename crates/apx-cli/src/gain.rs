@@ -13,8 +13,8 @@ const COMMAND_COUNT: usize = 14;
 const REASON_COUNT: usize = 15;
 
 const COMMAND_NAMES: [&str; COMMAND_COUNT] = [
-    "in", "new", "mv", "rm", "sel", "tsel", "bsel", "rsel", "type", "del", "copy", "cut",
-    "paste", "commit",
+    "in", "new", "mv", "rm", "sel", "tsel", "bsel", "rsel", "type", "del", "copy", "cut", "paste",
+    "commit",
 ];
 
 const REASON_NAMES: [&str; REASON_COUNT] = [
@@ -91,7 +91,10 @@ fn decode_metrics(bytes: &[u8]) -> Result<Metrics, String> {
         return Ok(Metrics::default());
     }
     if bytes.len() > 2 * METRICS_SLOT_SIZE {
-        return Err(format!("reading metrics: unexpected file size {}", bytes.len()));
+        return Err(format!(
+            "reading metrics: unexpected file size {}",
+            bytes.len()
+        ));
     }
     let mut best: Option<(u64, Metrics)> = None;
     let mut mismatched_version = false;
@@ -122,7 +125,10 @@ fn decode_metrics(bytes: &[u8]) -> Result<Metrics, String> {
             continue;
         }
         let candidate = decode_slot(encoded)?;
-        if best.as_ref().is_none_or(|(best_generation, _)| generation > *best_generation) {
+        if best
+            .as_ref()
+            .is_none_or(|(best_generation, _)| generation > *best_generation)
+        {
             best = Some((generation, candidate));
         }
     }
@@ -175,8 +181,16 @@ fn decode_slot(encoded: &[u8]) -> Result<Metrics, String> {
 }
 
 fn render(metrics: &Metrics) -> String {
-    let successful = metrics.commands.iter().map(|command| command.invocations - command.errors).sum::<u64>();
-    let failed = metrics.commands.iter().map(|command| command.errors).sum::<u64>();
+    let successful = metrics
+        .commands
+        .iter()
+        .map(|command| command.invocations - command.errors)
+        .sum::<u64>();
+    let failed = metrics
+        .commands
+        .iter()
+        .map(|command| command.errors)
+        .sum::<u64>();
     let all = successful + failed;
     let apx_success = metrics.hpatch_tokens;
     let patch_success = metrics.apply_patch_tokens;
@@ -236,9 +250,7 @@ fn render(metrics: &Metrics) -> String {
     ));
     output.push_str(&format!(
         "{:<32} {:>10}  {}\n",
-        "state reports",
-        metrics.report_input_tokens,
-        "final state returned after successful calls"
+        "state reports", metrics.report_input_tokens, "final state returned after successful calls"
     ));
     output.push_str(&format!(
         "{:<32} {:>10}  {}\n",
@@ -257,7 +269,10 @@ fn render(metrics: &Metrics) -> String {
         "sessions", metrics.sessions, "distinct routed sessions"
     ));
     output.push_str("\ncommand metrics:\n");
-    output.push_str(&format!("{:<12} {:>12} {:>7} {:>10}\n", "command", "invocations", "errors", "error rate"));
+    output.push_str(&format!(
+        "{:<12} {:>12} {:>7} {:>10}\n",
+        "command", "invocations", "errors", "error rate"
+    ));
     for (index, command) in metrics.commands.iter().enumerate() {
         output.push_str(&format!(
             "{:<12} {:>12} {:>7} {:>9}%\n",
@@ -337,7 +352,13 @@ fn sha256(input: &[u8]) -> [u8; 32] {
     }
     message.extend_from_slice(&bit_length.to_be_bytes());
     let mut state = [
-        0x6a09e667u32, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x6a09e667u32,
+        0xbb67ae85,
+        0x3c6ef372,
+        0xa54ff53a,
+        0x510e527f,
+        0x9b05688c,
+        0x1f83d9ab,
         0x5be0cd19,
     ];
     for chunk in message.chunks_exact(64) {

@@ -125,7 +125,10 @@ fn peek_marks_multiple_files_with_headers() {
     let files = baseline(&[("a.txt", "one\n"), ("b.txt", "two\n")]);
     let program = parse("in a.txt\nrsel 1:1\nin b.txt\nrsel 1:1\n").unwrap();
     let output = apx_core::evaluate_peek(&files, &program).unwrap();
-    assert_eq!(output, "==> a.txt <==\n     1\tone\n==> b.txt <==\n     1\ttwo\n");
+    assert_eq!(
+        output,
+        "==> a.txt <==\n     1\tone\n==> b.txt <==\n     1\ttwo\n"
+    );
 }
 
 #[test]

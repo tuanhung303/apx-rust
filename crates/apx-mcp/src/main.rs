@@ -18,7 +18,6 @@ const APX_MCP_DESCRIPTION: &str = "ONE atomic script, ALL edits; rejection chang
 const PEEK_MCP_DESCRIPTION: &str = "Read-only file viewing through the same selectors as the apx tool. Script may contain only in, sel, tsel, bsel, rsel; after each selector it prints just the selected lines, one-based numbered. Never modifies files — use it to read exactly the regions you plan to edit instead of printing whole files.";
 
 fn main() {
-
     let root_default = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
@@ -191,11 +190,11 @@ fn run_script(script: &str, root: Option<&str>, cwd: Option<&str>) -> (String, b
     };
     let root_path = PathBuf::from(&root_arg);
     if !root_path.is_absolute() {
-        return ("apx: workspace root must be absolute".to_owned(), false);
+        return failure("apx: workspace root must be absolute".to_owned());
     }
     let (canonical_root, alias) = match canonicalize_root(&root_path) {
         Ok(pair) => pair,
-        Err(message) => return (format!("apx: {message}"), false),
+        Err(message) => return failure(format!("apx: {message}")),
     };
     let cwd = match resolve_cwd(&canonical_root, &alias, cwd.unwrap_or(".")) {
         Ok(cwd) => cwd,
@@ -209,7 +208,7 @@ fn run_script(script: &str, root: Option<&str>, cwd: Option<&str>) -> (String, b
                 .iter()
                 .map(|error| error.diagnostic())
                 .collect();
-            return (text, false);
+            return failure(text);
         }
     };
     let program = match resolve_paths(program, &canonical_root, &alias, &cwd) {
@@ -219,15 +218,22 @@ fn run_script(script: &str, root: Option<&str>, cwd: Option<&str>) -> (String, b
     let baseline = FsBaseline::new(canonical_root.clone());
     let evaluation = match evaluate(&baseline, &program) {
         Ok(evaluation) => evaluation,
-        Err(error) => return (error.diagnostic(), false),
+        Err(error) => return failure(error.diagnostic()),
     };
     if evaluation.changes.changes.is_empty() {
         return (evaluation.report, true);
     }
     match apply(&canonical_root, &evaluation.changes) {
         Ok(()) => (evaluation.report, true),
-        Err(message) => (format!("apx: {message}"), false),
+        Err(message) => failure(format!("apx: {message}")),
     }
+}
+
+fn failure(text: String) -> (String, bool) {
+    (
+        format!("{}\nno changes applied (atomic)", text.trim_end()),
+        false,
+    )
 }
 
 /// Validate `cwd` against the canonical root exactly like the CLI: clean the
@@ -240,7 +246,10 @@ fn run_peek_script(script: &str, root: Option<&str>, cwd: Option<&str>) -> (Stri
     };
     let root_path = PathBuf::from(&root_arg);
     if !root_path.is_absolute() {
-        return ("apx peek: workspace root must be absolute".to_owned(), false);
+        return (
+            "apx peek: workspace root must be absolute".to_owned(),
+            false,
+        );
     }
     let (canonical_root, alias) = match canonicalize_root(&root_path) {
         Ok(pair) => pair,
@@ -273,7 +282,6 @@ fn run_peek_script(script: &str, root: Option<&str>, cwd: Option<&str>) -> (Stri
 }
 
 fn resolve_cwd(canonical_root: &Path, alias: &Path, cwd: &str) -> Result<String, String> {
-
     let relative = if cwd.starts_with('/') {
         let stripped = apx_local::strip_root_prefix(cwd, canonical_root)
             .or_else(|| apx_local::strip_root_prefix(cwd, alias));
@@ -283,7 +291,6 @@ fn resolve_cwd(canonical_root: &Path, alias: &Path, cwd: &str) -> Result<String,
             None => return Err("workspace cwd must resolve within root".to_owned()),
         }
     } else {
-
         let cleaned = apx_core::clean_path(cwd);
         if cleaned == ".." || cleaned.starts_with("../") {
             return Err("workspace cwd must resolve within root".to_owned());
@@ -302,7 +309,6 @@ fn resolve_cwd(canonical_root: &Path, alias: &Path, cwd: &str) -> Result<String,
         relative
     })
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -373,7 +379,11 @@ mod tests {
         );
         assert!(ok, "{text}");
         assert!(text.contains("1 file change"), "{text}");
-        assert!(text.contains("update a.txt"), "{text}");
+        assert!(text.contains("update a.txt (+1/-1)"), "{text}");
+        assert!(text.contains("changed lines:"), "{text}");
+        assert!(text.contains("- two"), "{text}");
+        assert!(text.contains("+ TWO"), "{text}");
+
         assert_eq!(
             std::fs::read_to_string(dir.join("a.txt")).unwrap(),
             "one\nTWO\n"
@@ -392,6 +402,8 @@ mod tests {
         );
         assert!(!ok, "{text}");
         assert!(!text.is_empty(), "diagnostic must be non-empty");
+        assert!(text.contains("no changes applied (atomic)"), "{text}");
+
         assert_eq!(
             std::fs::read_to_string(dir.join("a.txt")).unwrap(),
             "one\ntwo\n"
@@ -415,7 +427,6 @@ mod tests {
         // The escape was rejected before any filesystem access; /etc/passwd is untouched.
         std::fs::remove_dir_all(&dir).unwrap();
     }
-
 
     #[test]
     fn run_script_accepts_absolute_cwd_equal_to_root() {
@@ -454,7 +465,6 @@ mod tests {
 
     #[test]
     fn tools_call_applies_script_end_to_end() {
-
         let dir = scratch("call");
         std::fs::write(dir.join("a.txt"), "one\n").unwrap();
         let params = json!({
@@ -560,8 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn notifications_and_ping_are_handled()
- {
+    fn notifications_and_ping_are_handled() {
         assert!(
             handle_line(
                 r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,

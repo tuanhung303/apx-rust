@@ -2,8 +2,8 @@
 //! Compatibility CLI: apply/translate/gain, mirroring the frozen Go oracle's
 //! command-line contract (`apx [--root ROOT] [--cwd CWD] < SCRIPT`).
 
-use apx_core::{evaluate, evaluate_peek, parse, Instruction, Operation, Program};
-use apx_local::{apply, canonicalize_root, resolve_paths, FsBaseline};
+use apx_core::{Instruction, Operation, Program, evaluate, evaluate_peek, parse};
+use apx_local::{FsBaseline, apply, canonicalize_root, resolve_paths};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -213,7 +213,11 @@ fn run(args: &[String], script: &str) -> i32 {
             return 1;
         }
     };
-    let cwd = match resolve_cwd(&canonical_root, &alias, invocation.cwd.as_deref().unwrap_or(".")) {
+    let cwd = match resolve_cwd(
+        &canonical_root,
+        &alias,
+        invocation.cwd.as_deref().unwrap_or("."),
+    ) {
         Ok(cwd) => cwd,
         Err(message) => {
             eprintln!("apx: {message}");
@@ -386,7 +390,6 @@ fn resolve_cwd(canonical_root: &Path, alias: &Path, cwd: &str) -> Result<String,
             Some(_) => ".".to_owned(),
             None => return Err("workspace cwd must resolve within root".to_owned()),
         }
-
     } else {
         let cleaned = apx_core::clean_path(cwd);
         if cleaned == ".." || cleaned.starts_with("../") {
@@ -400,9 +403,12 @@ fn resolve_cwd(canonical_root: &Path, alias: &Path, cwd: &str) -> Result<String,
     if !metadata.is_dir() {
         return Err("workspace cwd must be a directory".to_owned());
     }
-    Ok(if relative.is_empty() { ".".to_owned() } else { relative })
+    Ok(if relative.is_empty() {
+        ".".to_owned()
+    } else {
+        relative
+    })
 }
-
 
 fn fail_commands(errors: &[apx_core::CommandError]) -> i32 {
     for error in errors {

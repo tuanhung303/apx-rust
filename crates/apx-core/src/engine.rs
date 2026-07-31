@@ -1,3 +1,4 @@
+use crate::diff::{DiffLine, DiffResult, diff_lines};
 use crate::editor::{Editor, logical_lines};
 use crate::{Change, ChangeKind, ChangeSet, CommandError, Evaluation, Operation, Program};
 use std::collections::{BTreeMap, BTreeSet};
@@ -61,8 +62,12 @@ pub fn evaluate<B: Baseline>(baseline: &B, program: &Program) -> Result<Evaluati
 impl<B: Baseline> Workspace<'_, B> {
     fn evaluate(mut self, program: &Program) -> Result<Evaluation, CommandError> {
         for (index, instruction) in program.instructions.iter().enumerate() {
-            if let Err(message) = self.execute(&instruction.operation, index + 1, instruction.line)
+            if let Err(mut message) =
+                self.execute(&instruction.operation, index + 1, instruction.line)
             {
+                if let Some(active) = self.active {
+                    message = format!("{message}; in {}", self.files[active].path);
+                }
                 return Err(CommandError {
                     command: index + 1,
                     line: instruction.line,
@@ -297,38 +302,158 @@ impl<B: Baseline> Workspace<'_, B> {
     }
 
     fn report(&self, changes: &ChangeSet) -> String {
-        let mut report = match self.active {
-            Some(index) => format!("in {}\n", self.files[index].path),
-            None => "no active file\n".to_owned(),
-        };
+        let mut report = String::new();
+        if changes.changes.is_empty() {
+            report.push_str("0 file changes (no net edits; content already matches)\n");
+            return report;
+        }
         report.push_str(&format!(
             "{} file change{}\n",
             changes.changes.len(),
             if changes.changes.len() == 1 { "" } else { "s" }
         ));
+        let mut diffs = Vec::with_capacity(changes.changes.len());
         for change in &changes.changes {
+            let diff = if matches!(change.kind, ChangeKind::Add | ChangeKind::Delete) {
+                DiffResult::default()
+            } else {
+                diff_lines(&change.original, &change.content)
+            };
+            diffs.push(diff);
+        }
+        for (change, diff) in changes.changes.iter().zip(&diffs) {
             match change.kind {
                 ChangeKind::Add => report.push_str(&format!(
-                    "add {}\n",
-                    change.path.as_deref().unwrap_or_default()
+                    "add {} ({})\n",
+                    change.path.as_deref().unwrap_or_default(),
+                    line_label(change.content.lines().count())
                 )),
                 ChangeKind::Delete => report.push_str(&format!(
-                    "delete {}\n",
-                    change.original_path.as_deref().unwrap_or_default()
+                    "delete {} ({})\n",
+                    change.original_path.as_deref().unwrap_or_default(),
+                    line_label(change.original.lines().count())
                 )),
                 ChangeKind::Update => report.push_str(&format!(
-                    "update {}\n",
-                    change.path.as_deref().unwrap_or_default()
+                    "update {} (+{}/-{})\n",
+                    change.path.as_deref().unwrap_or_default(),
+                    diff.added,
+                    diff.removed
                 )),
                 ChangeKind::Move => report.push_str(&format!(
-                    "move {} -> {}\n",
+                    "move {} -> {} (+{}/-{})\n",
                     change.original_path.as_deref().unwrap_or_default(),
-                    change.path.as_deref().unwrap_or_default()
+                    change.path.as_deref().unwrap_or_default(),
+                    diff.added,
+                    diff.removed
                 )),
+            }
+        }
+        let mut preview: Vec<String> = Vec::new();
+        let mut omitted = 0usize;
+        let mut truncated_diff = false;
+        let mut preview_bytes = 0usize;
+        for (change, diff) in changes.changes.iter().zip(&diffs) {
+            if matches!(change.kind, ChangeKind::Add | ChangeKind::Delete) {
+                continue;
+            }
+            truncated_diff |= diff.truncated;
+            let rendered = render_preview(diff);
+            let mut per_file_lines = 0usize;
+            let mut per_file_bytes = 0usize;
+            for line in rendered {
+                if per_file_lines >= REPORT_PREVIEW_LINES
+                    || per_file_bytes >= REPORT_PREVIEW_BYTES
+                    || preview_bytes >= REPORT_TOTAL_BYTES
+                {
+                    omitted += 1;
+                    continue;
+                }
+                per_file_lines += 1;
+                per_file_bytes += line.len() + 1;
+                preview_bytes += line.len() + 1;
+                preview.push(line);
+            }
+        }
+        if !preview.is_empty() || truncated_diff {
+            report.push_str("changed lines:\n");
+            for line in &preview {
+                report.push_str(line);
+                report.push('\n');
+            }
+            if omitted > 0 {
+                report.push_str(&format!("... {omitted} more changed lines omitted\n"));
+            } else if truncated_diff {
+                report
+                    .push_str("... line diff truncated (file too large); counts above are exact\n");
             }
         }
         report
     }
+}
+
+/// Maximum preview lines per changed file.
+const REPORT_PREVIEW_LINES: usize = 60;
+/// Maximum length of one previewed line; longer lines are truncated with a marker.
+const REPORT_LINE_CAP: usize = 160;
+/// Maximum preview bytes per changed file.
+const REPORT_PREVIEW_BYTES: usize = 4096;
+/// Maximum total report size; the preview is cut first.
+const REPORT_TOTAL_BYTES: usize = 8192;
+
+fn line_label(count: usize) -> String {
+    format!("{} line{}", count, if count == 1 { "" } else { "s" })
+}
+
+fn cap_line(line: &str) -> String {
+    let chars = line.chars().count();
+    if chars <= REPORT_LINE_CAP {
+        return line.to_owned();
+    }
+    let mut capped: String = line.chars().take(REPORT_LINE_CAP).collect();
+    capped.push_str(&format!("... [{} chars total]", chars));
+    capped
+}
+
+fn line_text(line: &DiffLine) -> String {
+    match line {
+        DiffLine::Removed { text, .. } | DiffLine::Added { text, .. } => cap_line(text),
+    }
+}
+
+/// Render a diff's changed lines as `- old` / `+ new` pairs (unified-diff
+/// hunk order), so a replaced line's old and new text stay adjacent.
+fn render_preview(diff: &DiffResult) -> Vec<String> {
+    let mut out = Vec::new();
+    let lines = &diff.lines;
+    let mut i = 0;
+    while i < lines.len() {
+        if let DiffLine::Added { .. } = &lines[i] {
+            out.push(format!("+ {}", line_text(&lines[i])));
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < lines.len() && matches!(lines[j], DiffLine::Removed { .. }) {
+            j += 1;
+        }
+        let mut k = j;
+        while k < lines.len() && matches!(lines[k], DiffLine::Added { .. }) {
+            k += 1;
+        }
+        let (removed, added) = (&lines[i..j], &lines[j..k]);
+        for (old, new) in removed.iter().zip(added) {
+            out.push(format!("- {}", line_text(old)));
+            out.push(format!("+ {}", line_text(new)));
+        }
+        for old in &removed[added.len().min(removed.len())..] {
+            out.push(format!("- {}", line_text(old)));
+        }
+        for new in &added[removed.len().min(added.len())..] {
+            out.push(format!("+ {}", line_text(new)));
+        }
+        i = k;
+    }
+    out
 }
 
 fn category(operation: &Operation) -> &'static str {
@@ -401,7 +526,11 @@ pub fn evaluate_peek<B: Baseline>(baseline: &B, program: &Program) -> Result<Str
                     .editor
                     .select_columns(*line, *start, *end)
                     .map_err(failure)?;
-                render_selection(&mut output, &active.content, &active.editor.selected_spans());
+                render_selection(
+                    &mut output,
+                    &active.content,
+                    &active.editor.selected_spans(),
+                );
             }
             Operation::TextSelect { line, text, count } => {
                 let active = active
@@ -411,27 +540,33 @@ pub fn evaluate_peek<B: Baseline>(baseline: &B, program: &Program) -> Result<Str
                     .editor
                     .select_matches(*line, text, *count)
                     .map_err(failure)?;
-                render_selection(&mut output, &active.content, &active.editor.selected_spans());
+                render_selection(
+                    &mut output,
+                    &active.content,
+                    &active.editor.selected_spans(),
+                );
             }
             Operation::BlockSelect { start, end } => {
                 let active = active
                     .as_mut()
                     .ok_or_else(|| failure("bsel requires an active file".to_owned()))?;
-                active
-                    .editor
-                    .select_block(start, end)
-                    .map_err(failure)?;
-                render_selection(&mut output, &active.content, &active.editor.selected_spans());
+                active.editor.select_block(start, end).map_err(failure)?;
+                render_selection(
+                    &mut output,
+                    &active.content,
+                    &active.editor.selected_spans(),
+                );
             }
             Operation::RangeSelect { start, end } => {
                 let active = active
                     .as_mut()
                     .ok_or_else(|| failure("rsel requires an active file".to_owned()))?;
-                active
-                    .editor
-                    .select_lines(*start, *end)
-                    .map_err(failure)?;
-                render_selection(&mut output, &active.content, &active.editor.selected_spans());
+                active.editor.select_lines(*start, *end).map_err(failure)?;
+                render_selection(
+                    &mut output,
+                    &active.content,
+                    &active.editor.selected_spans(),
+                );
             }
             other => {
                 return Err(failure(format!(
@@ -451,8 +586,113 @@ fn render_selection(output: &mut String, content: &str, spans: &[(usize, usize)]
         for (index, &(line_start, content_end, full_end)) in lines.iter().enumerate() {
             if line_start < end && full_end > start && !rendered.contains(&index) {
                 rendered.push(index);
-                output.push_str(&format!("{:>6}\t{}\n", index + 1, &content[line_start..content_end]));
+                output.push_str(&format!(
+                    "{:>6}\t{}\n",
+                    index + 1,
+                    &content[line_start..content_end]
+                ));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{MemoryBaseline, parse};
+
+    fn evaluate_script(files: &[(&str, &str)], script: &str) -> Evaluation {
+        let baseline = MemoryBaseline::new(
+            files
+                .iter()
+                .map(|(path, content)| ((*path).to_owned(), (*content).to_owned())),
+        );
+        let program = parse(script).expect("script must parse");
+        evaluate(&baseline, &program).expect("script must evaluate")
+    }
+
+    #[test]
+    fn report_shows_update_counts_and_preview() {
+        let evaluation = evaluate_script(
+            &[("a.txt", "one\ntwo\nthree\n")],
+            "in a.txt\ntsel 2 \"two\"\ntype \"TWO\"\n",
+        );
+        let report = evaluation.report;
+        assert!(report.contains("1 file change"), "{report}");
+        assert!(report.contains("update a.txt (+1/-1)"), "{report}");
+        assert!(report.contains("changed lines:"), "{report}");
+        assert!(report.contains("- two"), "{report}");
+        assert!(report.contains("+ TWO"), "{report}");
+    }
+
+    #[test]
+    fn report_labels_add_delete_and_moved_create() {
+        let evaluation = evaluate_script(
+            &[("a.txt", "hello\n")],
+            "new b.txt\ntype <<PATCH\nx\ny\nPATCH\nrm a.txt\nin b.txt\nmv c.txt\n",
+        );
+        let report = evaluation.report;
+        assert!(report.contains("2 file changes"), "{report}");
+        assert!(report.contains("add c.txt (2 lines)"), "{report}");
+        assert!(report.contains("delete a.txt (1 line)"), "{report}");
+    }
+
+    #[test]
+    fn report_labels_move_of_existing_file() {
+        let evaluation = evaluate_script(&[("a.txt", "hello\n")], "in a.txt\nmv b.txt\n");
+        assert!(
+            evaluation.report.contains("move a.txt -> b.txt (+0/-0)"),
+            "{}",
+            evaluation.report
+        );
+    }
+
+    #[test]
+    fn report_noop_script_is_explicit() {
+        let evaluation = evaluate_script(
+            &[("a.txt", "one\ntwo\n")],
+            "in a.txt\ntsel 2 \"two\"\ntype \"two\"\n",
+        );
+        assert!(
+            evaluation
+                .report
+                .contains("0 file changes (no net edits; content already matches)"),
+            "{}",
+            evaluation.report
+        );
+    }
+
+    #[test]
+    fn report_truncates_preview_at_cap() {
+        let mut original = String::new();
+        let mut updated = String::new();
+        for i in 1..=70 {
+            original.push_str(&format!("line {i}\n"));
+            updated.push_str(&format!("LINE {i}\n"));
+        }
+        let mut script = String::from("in a.txt\nrsel 1:70\ntype <<PATCH\n");
+        script.push_str(&updated);
+        script.push_str("PATCH\n");
+        let evaluation = evaluate_script(&[("a.txt", &original)], &script);
+        let report = evaluation.report;
+        assert!(report.contains("update a.txt (+70/-70)"), "{report}");
+        assert!(report.contains("- line 1"), "{report}");
+        assert!(report.contains("+ LINE 1"), "{report}");
+        assert!(
+            report.contains("... 80 more changed lines omitted"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn failure_diagnostic_includes_active_file() {
+        let baseline = MemoryBaseline::new(vec![("a.txt".to_owned(), "one\ntwo\n".to_owned())]);
+        let program = parse("in a.txt\ntsel 9 \"missing\"\n").unwrap();
+        let error = evaluate(&baseline, &program).expect_err("tsel must fail");
+        assert!(
+            error.diagnostic().contains("; in a.txt"),
+            "{}",
+            error.diagnostic()
+        );
     }
 }
