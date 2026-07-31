@@ -321,7 +321,7 @@ Gate:
 
 Deliverables:
 
-- Add `crates/apx-mcp`: a minimal stdio MCP server exposing one `apx` tool whose
+- Add `crates/apx-mcp`: a minimal stdio MCP server exposing an `apx` apply tool plus a read-only `peek` tool whose
   `inputSchema` carries `script` (required) plus optional `root`/`cwd`. The
   server calls `parse`/`evaluate`/`apply` from `apx-core` + `apx-local`
   in-process, mirroring the CLI apply flow exactly.

@@ -47,15 +47,18 @@ apx-core + apx-local (in-process)
 workspace files
 ```
 
-`apx-mcp` exposes one tool `apx` with a diff-only description ("like
-apply_patch, but takes an APX diff script"), so the model sees a first-class
-function schema instead of prose instructions about a CLI.
+`apx-mcp` exposes two tools through a registered MCP server: `apx` (apply) with
+a diff-only description ("like apply_patch, but takes an APX diff script"), so
+the model sees a first-class function schema instead of prose instructions
+about a CLI, and `peek` (read-only, selector-scoped region reads through the
+same grammar).
 
 ## Benchmarks
 
 
 - [iter4 — Rust CLI vs apply_patch (DeepSeek flash low, blind)](docs/benchmarks/iter4.md)
 - [iter5 — apx as a registered MCP tool vs apply_patch (DeepSeek flash low, blind)](docs/benchmarks/iter5.md)
+- [iter6 — desc v3 (K3-tuned) + peek tool (DeepSeek flash low, blind)](docs/benchmarks/iter6.md)
 
 See [MIGRATION_PLAN.md](MIGRATION_PLAN.md) for the staged implementation and
 cutover gates.

@@ -1,21 +1,24 @@
 #![forbid(unsafe_code)]
-//! Minimal hand-rolled MCP (Model Context Protocol) stdio server exposing one
-//! tool, `apx`, that applies APX edit scripts through the local engine.
-//!
+//! Minimal hand-rolled MCP (Model Context Protocol) stdio server exposing two
+//! tools, `apx` (apply APX edit scripts) and `peek` (read-only region reads),
+//! both through the local engine.
 //! Transport is newline-delimited JSON-RPC 2.0 on stdin/stdout; everything
 //! else (logs, diagnostics) goes to stderr. The apply flow mirrors
 //! `apx-cli`'s `run()` with `Mode::Apply` exactly.
 
-use apx_core::{evaluate, parse};
+use apx_core::{evaluate, evaluate_peek, parse};
 use apx_local::{FsBaseline, apply, canonicalize_root, resolve_paths};
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 /// Tool description exposed to the model through `tools/list`.
-const APX_MCP_DESCRIPTION: &str = "Like apply_patch, but takes one APX diff script as the entire payload; atomic — a rejection changes nothing, so fix the script from the returned diagnostic and retry. Script: `in PATH` (select an existing file) or `new PATH` (create and select), then selectors followed by `type`: `tsel FROM_LINE \"TEXT\" [N]` selects the first N exact one-line matches as a FRAGMENT (`type` replaces only the matched fragment), `bsel \"START\" \"END\"` selects the span through both unique anchors, `rsel S:E` selects COMPLETE LINES — use it to replace whole lines or blocks, `sel LINE S:E` picks a column range on one line. Then `type \"TEXT\"` (inline) or `type <<PATCH` heredoc with the closing PATCH immediately after the final content line. Also `mv DEST` (select the source first with `in PATH`), `rm`, `del`, `cut`/`copy`/`paste`, `commit`. Line numbers are frozen baseline values — never adjust them for an earlier edit in the same script, and inserted text is not selectable. Relative paths resolve from the cwd argument (default `.`); paths must stay inside the root. Batch every edit for the task into ONE script across as many files as needed; never re-emit a whole file for a localized change (prefer rsel for whole-line, tsel/bsel for fragment edits). Selector text is always double-quoted (escape embedded quotes as \"); single quotes are invalid.";
+const APX_MCP_DESCRIPTION: &str = "ONE atomic script, ALL edits; rejection changes nothing; fix from diagnostic, retry. `in PATH` existing file; `new PATH` creates one. `tsel FROM_LINE \"TEXT\" [N]` first N exact 1-line fragments, `bsel \"START\" \"END\"` span two unique anchors: FRAGMENT-only, replaces match, never line; `rsel S:E` COMPLETE LINES for whole lines/blocks; `sel LINE S:E` column range on one line. `type \"TEXT\"` or `type <<PATCH` heredoc, PATCH right after last content line. `mv DEST` needs prior `in`; also `rm`/`del`/`cut`/`copy`/`paste`/`commit`. Selector text double-quoted (\\\" escaped); single quotes invalid. Baseline line numbers frozen; never adjust for in-script edits; inserted text isn't selectable. Never re-emit whole files for localized changes. Paths from `cwd` (default `.`), stay inside `root`.";
+
+const PEEK_MCP_DESCRIPTION: &str = "Read-only file viewing through the same selectors as the apx tool. Script may contain only in, sel, tsel, bsel, rsel; after each selector it prints just the selected lines, one-based numbered. Never modifies files — use it to read exactly the regions you plan to edit instead of printing whole files.";
 
 fn main() {
+
     let root_default = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
@@ -107,19 +110,34 @@ fn initialize_result() -> Value {
 
 fn tools_list() -> Value {
     json!({
-        "tools": [{
-            "name": "apx",
-            "description": APX_MCP_DESCRIPTION,
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "script": {"type": "string"},
-                    "root": {"type": "string"},
-                    "cwd": {"type": "string"}
-                },
-                "required": ["script"]
+        "tools": [
+            {
+                "name": "apx",
+                "description": APX_MCP_DESCRIPTION,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "script": {"type": "string"},
+                        "root": {"type": "string"},
+                        "cwd": {"type": "string"}
+                    },
+                    "required": ["script"]
+                }
+            },
+            {
+                "name": "peek",
+                "description": PEEK_MCP_DESCRIPTION,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "script": {"type": "string"},
+                        "root": {"type": "string"},
+                        "cwd": {"type": "string"}
+                    },
+                    "required": ["script"]
+                }
             }
-        }]
+        ]
     })
 }
 
@@ -130,6 +148,10 @@ fn tools_list() -> Value {
 fn tools_call(params: Option<&Value>, root_default: &Path) -> Result<Value, (i64, &'static str)> {
     let params = params
         .and_then(Value::as_object)
+        .ok_or((-32602, "invalid params"))?;
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
         .ok_or((-32602, "invalid params"))?;
     let arguments = params
         .get("arguments")
@@ -147,10 +169,14 @@ fn tools_call(params: Option<&Value>, root_default: &Path) -> Result<Value, (i64
         Some(value) => Some(value.as_str().ok_or((-32602, "invalid params"))?.to_owned()),
         None => None,
     };
-    let (text, _success) = run_script(script, root.as_deref(), cwd.as_deref());
+    let (text, success) = match name {
+        "apx" => run_script(script, root.as_deref(), cwd.as_deref()),
+        "peek" => run_peek_script(script, root.as_deref(), cwd.as_deref()),
+        _ => return Err((-32602, "unknown tool")),
+    };
     Ok(json!({
         "content": [{"type": "text", "text": text}],
-        "isError": false
+        "isError": !success
     }))
 }
 
@@ -206,7 +232,48 @@ fn run_script(script: &str, root: Option<&str>, cwd: Option<&str>) -> (String, b
 
 /// Validate `cwd` against the canonical root exactly like the CLI: clean the
 /// path, reject escapes above the root, and require an existing directory.
+fn run_peek_script(script: &str, root: Option<&str>, cwd: Option<&str>) -> (String, bool) {
+    let current = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let root_arg = match root {
+        Some(root) => root.to_owned(),
+        None => current.to_string_lossy().into_owned(),
+    };
+    let root_path = PathBuf::from(&root_arg);
+    if !root_path.is_absolute() {
+        return ("apx peek: workspace root must be absolute".to_owned(), false);
+    }
+    let (canonical_root, alias) = match canonicalize_root(&root_path) {
+        Ok(pair) => pair,
+        Err(message) => return (format!("apx peek: {message}"), false),
+    };
+    let cwd = match resolve_cwd(&canonical_root, &alias, cwd.unwrap_or(".")) {
+        Ok(cwd) => cwd,
+        Err(message) => return (format!("apx peek: {message}"), false),
+    };
+    let program = match parse(script) {
+        Ok(program) => program,
+        Err(errors) => {
+            let text: String = errors
+                .commands
+                .iter()
+                .map(|error| error.diagnostic())
+                .collect();
+            return (text, false);
+        }
+    };
+    let program = match resolve_paths(program, &canonical_root, &alias, &cwd) {
+        Ok(program) => program,
+        Err(message) => return (format!("apx peek: {message}"), false),
+    };
+    let baseline = FsBaseline::new(canonical_root.clone());
+    match evaluate_peek(&baseline, &program) {
+        Ok(text) => (text, true),
+        Err(error) => (error.diagnostic(), false),
+    }
+}
+
 fn resolve_cwd(canonical_root: &Path, alias: &Path, cwd: &str) -> Result<String, String> {
+
     let relative = if cwd.starts_with('/') {
         let stripped = apx_local::strip_root_prefix(cwd, canonical_root)
             .or_else(|| apx_local::strip_root_prefix(cwd, alias));
@@ -278,7 +345,7 @@ mod tests {
         let value: Value = serde_json::from_str(&response).unwrap();
         assert_eq!(value["id"], "t1");
         let tools = value["result"]["tools"].as_array().expect("tools array");
-        assert_eq!(tools.len(), 1);
+        assert_eq!(tools.len(), 2);
         let tool = &tools[0];
         assert_eq!(tool["name"], "apx");
         assert_eq!(tool["description"], APX_MCP_DESCRIPTION);
@@ -289,6 +356,10 @@ mod tests {
         );
         assert_eq!(tool["inputSchema"]["properties"]["root"]["type"], "string");
         assert_eq!(tool["inputSchema"]["properties"]["cwd"]["type"], "string");
+        let peek = &tools[1];
+        assert_eq!(peek["name"], "peek");
+        assert_eq!(peek["description"], PEEK_MCP_DESCRIPTION);
+        assert_eq!(peek["inputSchema"]["required"], json!(["script"]));
     }
 
     #[test]
@@ -434,7 +505,63 @@ mod tests {
     }
 
     #[test]
-    fn notifications_and_ping_are_handled() {
+    fn run_peek_script_reads_region_and_never_writes() {
+        let dir = scratch("peek");
+        std::fs::write(dir.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        let (text, ok) = run_peek_script("in a.txt\nrsel 2:3\n", Some(dir.to_str().unwrap()), None);
+        assert!(ok, "{text}");
+        assert!(text.contains("\ttwo"), "{text}");
+        assert!(text.contains("\tthree"), "{text}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\ntwo\nthree\n"
+        );
+        let (bad, bad_ok) = run_peek_script(
+            "in a.txt\ntsel 2 \"two\"\ntype \"TWO\"\n",
+            Some(dir.to_str().unwrap()),
+            None,
+        );
+        assert!(!bad_ok, "{bad}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\ntwo\nthree\n"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn tools_call_peek_reads_region() {
+        let dir = scratch("call-peek");
+        std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+        let params = json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {
+                "name": "peek",
+                "arguments": {
+                    "script": "in a.txt\nrsel 2:2\n",
+                    "root": dir.to_str().unwrap()
+                }
+            }
+        });
+        let response =
+            handle_line(&serde_json::to_string(&params).unwrap(), Path::new(".")).unwrap();
+        let value: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["id"], 10);
+        assert_eq!(value["result"]["isError"], false);
+        let text = value["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\ttwo"), "{text}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\ntwo\n"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn notifications_and_ping_are_handled()
+ {
         assert!(
             handle_line(
                 r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
