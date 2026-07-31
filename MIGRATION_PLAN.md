@@ -335,6 +335,14 @@ Gate:
 
 - A stock `codex` MCP client lists the `apx` tool from the schema with no
   instruction-file steering.
+
+Status (iter9, 2026-08-01): the MCP `apx` tool is listed and used on
+first edit with zero check loops; 4-session blind benchmarks hold
+functional accuracy at apply_patch parity (64/66 raw, A6 task-bound only)
+with input at control parity (1.41M avg) and output bounded by the rich
+report (≈25k avg, ≤1.5KB per report). The tool surface is now: MCP `apx`
+(desc v4 + worked example) + `peek` + `#` comment skip + rm/new
+one-script replacement + rich report with `; in PATH` failure context.
 - Blind sessions call the tool on first edit: zero `--tool-help` reads, zero
   crate spelunking, zero check loops.
 - Accuracy stays at apply_patch parity and session tokens stop exceeding the

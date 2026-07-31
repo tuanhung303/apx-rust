@@ -46,7 +46,7 @@ pub fn parse(source: &str) -> Result<Program, CommandGroupError> {
         let header = index;
         let line = &lines[index].text;
         index += 1;
-        if line.trim().is_empty() {
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
             continue;
         }
         command += 1;

@@ -167,3 +167,172 @@ fn new_still_rejects_an_untouched_baseline_destination() {
     assert!(error.message.contains("already exists"));
     assert!(error.message.contains("rm it first"));
 }
+
+#[test]
+fn comments_are_skipped_and_command_numbers_stay_executable() {
+    let program = parse(concat!(
+        "# step one\n",
+        "in a.txt\n",
+        "  # indented comment\n",
+        "tsel 1 \"x\"\n",
+        "type \"y\"\n",
+    ))
+    .unwrap();
+    assert_eq!(program.instructions.len(), 3);
+    assert_eq!(program.instructions[1].operation.name(), "tsel");
+
+    let files = baseline(&[("a.txt", "x\n")]);
+    let result = evaluate(&files, &program).unwrap();
+    assert_eq!(result.changes.changes[0].content, "y\n");
+
+    let bad = parse("# c\nin a.txt\ntsel 9 \"miss\"\n# tail\n").unwrap();
+    let error = evaluate(&files, &bad).unwrap_err();
+    assert_eq!(error.command, 2);
+    assert!(error.message.contains("; in a.txt"));
+}
+
+#[test]
+fn hash_inside_heredoc_and_quotes_is_content_not_comment() {
+    let files = baseline(&[("a.txt", "line\n")]);
+    let program = parse(concat!(
+        "in a.txt\n",
+        "rsel 1:1\n",
+        "type <<PATCH\n",
+        "# not a comment\n",
+        "\"quoted\"\n",
+        "PATCH\n",
+    ))
+    .unwrap();
+    let result = evaluate(&files, &program).unwrap();
+    assert_eq!(
+        result.changes.changes[0].content,
+        "# not a comment\n\"quoted\"\n"
+    );
+
+    let files = baseline(&[("b.txt", "#hash\n")]);
+    let program = parse("in b.txt\ntsel 1 \"#hash\"\ntype \"#done\"\n").unwrap();
+    let result = evaluate(&files, &program).unwrap();
+    assert_eq!(result.changes.changes[0].content, "#done\n");
+}
+
+#[test]
+fn unicode_emoji_and_alt_symbols_edit_roundtrip() {
+    let files = baseline(&[(
+        "utf8.txt",
+        "name: Nguyễn Văn A\nmood: 🐍🔥\nprice: 100© ± 5°\n中文测试\n",
+    )]);
+    let program = parse(concat!(
+        "in utf8.txt\n",
+        "tsel 2 \"🐍🔥\"\n",
+        "type \"🐍✨\"\n",
+        "tsel 3 \"©\"\n",
+        "type \"®\"\n",
+        "tsel 4 \"中文测试\"\n",
+        "type \"日本語\"\n",
+    ))
+    .unwrap();
+    let result = evaluate(&files, &program).unwrap();
+    assert_eq!(
+        result.changes.changes[0].content,
+        "name: Nguyễn Văn A\nmood: 🐍✨\nprice: 100® ± 5°\n日本語\n"
+    );
+    assert!(result.report.contains("- mood: 🐍🔥"), "{}", result.report);
+    assert!(result.report.contains("+ mood: 🐍✨"), "{}", result.report);
+}
+
+#[test]
+fn regex_metacharacters_are_literal_in_selectors() {
+    let files = baseline(&[("calc.txt", "cost = arr[0] * 2 + (1|2)\n")]);
+    let program = parse("in calc.txt\ntsel 1 \"arr[0] * 2\"\ntype \"arr[0] * 3\"\n").unwrap();
+    let result = evaluate(&files, &program).unwrap();
+    assert_eq!(
+        result.changes.changes[0].content,
+        "cost = arr[0] * 3 + (1|2)\n"
+    );
+
+    let files = baseline(&[("re.txt", "m = a^b$c.d*e\n")]);
+    let program = parse("in re.txt\ntsel 1 \"a^b$c.d*e\"\ntype \"a^b$c.d*f\"\n").unwrap();
+    let result = evaluate(&files, &program).unwrap();
+    assert_eq!(result.changes.changes[0].content, "m = a^b$c.d*f\n");
+}
+
+#[test]
+fn escaped_quotes_and_backslashes_roundtrip() {
+    let files = baseline(&[("cfg.txt", "say \"hi\" path=C:\\tmp\\a\n")]);
+    let program = parse(concat!(
+        "in cfg.txt\n",
+        "tsel 1 \"say \\\"hi\\\"\"\n",
+        "type \"say \\\"bye\\\"\"\n",
+        "tsel 1 \"C:\\\\tmp\\\\a\"\n",
+        "type \"C:\\\\tmp\\\\b\"\n",
+    ))
+    .unwrap();
+    let result = evaluate(&files, &program).unwrap();
+    assert_eq!(
+        result.changes.changes[0].content,
+        "say \"bye\" path=C:\\tmp\\b\n"
+    );
+}
+
+#[test]
+fn json_unicode_escapes_in_selectors_decode() {
+    let files = baseline(&[("cafe.txt", "café\n")]);
+    let program = parse("in cafe.txt\ntsel 1 \"caf\\u00e9\"\ntype \"caf\\u00e8\"\n").unwrap();
+    let result = evaluate(&files, &program).unwrap();
+    assert_eq!(result.changes.changes[0].content, "cafè\n");
+}
+
+#[test]
+fn heredoc_close_requires_exact_delimiter_line() {
+    let files = baseline(&[("a.txt", "old\n")]);
+    let program = parse(concat!(
+        "in a.txt\n",
+        "rsel 1:1\n",
+        "type <<PATCH\n",
+        "PATCH not the close\n",
+        "PATCHX\n",
+        " PATCH\n",
+        "PATCH\n",
+    ))
+    .unwrap();
+    let result = evaluate(&files, &program).unwrap();
+    assert_eq!(
+        result.changes.changes[0].content,
+        "PATCH not the close\nPATCHX\n PATCH\n"
+    );
+}
+
+#[test]
+fn crlf_script_line_endings_parse() {
+    let files = baseline(&[("a.txt", "A\n")]);
+    let program = parse("in a.txt\r\nrsel 1:1\r\ntype \"B\"\r\n").unwrap();
+    let result = evaluate(&files, &program).unwrap();
+    assert_eq!(result.changes.changes[0].content, "B\n");
+}
+
+#[test]
+fn comment_only_script_is_a_clean_noop() {
+    let files = baseline(&[("a.txt", "x\n")]);
+    let program = parse("# nothing to do\n# still nothing\n").unwrap();
+    assert!(program.instructions.is_empty());
+    let result = evaluate(&files, &program).unwrap();
+    assert!(result.changes.changes.is_empty());
+    assert!(
+        result
+            .report
+            .contains("0 file changes (no net edits; content already matches)")
+    );
+}
+
+#[test]
+fn bsel_anchors_with_escaped_quotes_and_unicode() {
+    let files = baseline(&[("a.txt", "start \"x\"\nmiddle\nend 🎯\n")]);
+    let program = parse(concat!(
+        "in a.txt\n",
+        "bsel \"start \\\"x\\\"\" \"end 🎯\"\n",
+        "type \"REPLACED\"",
+    ))
+    .unwrap();
+    let result = evaluate(&files, &program).unwrap();
+    assert_eq!(result.changes.changes[0].content, "REPLACED\n");
+}

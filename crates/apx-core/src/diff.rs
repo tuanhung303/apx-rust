@@ -172,4 +172,25 @@ mod tests {
         assert!(result.lines.is_empty());
         assert!(!result.truncated);
     }
+
+    #[test]
+    fn unicode_emoji_lines_are_preserved() {
+        let old = "café\n🚀 rocket\n©®°\n中文测试\n";
+        let new = "café\n🚀 rocket\n🎉 party\n中文测试\n";
+        let result = diff_lines(old, new);
+        assert_eq!((result.removed, result.added), (1, 1));
+        assert_eq!(
+            result.lines,
+            vec![
+                DiffLine::Removed {
+                    old: 3,
+                    text: "©®°".to_owned()
+                },
+                DiffLine::Added {
+                    new: 3,
+                    text: "🎉 party".to_owned()
+                },
+            ]
+        );
+    }
 }

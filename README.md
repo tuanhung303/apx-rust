@@ -61,6 +61,7 @@ same grammar).
 - [iter6 — desc v3 (K3-tuned) + peek tool (DeepSeek flash low, blind)](docs/benchmarks/iter6.md)
 - [iter7 — desc v4 (worked example) + peek steering (DeepSeek flash low, blind)](docs/benchmarks/iter7.md)
 - [iter8 — rm+new one-script replacement; convergence (DeepSeek flash low, blind)](docs/benchmarks/iter8.md)
+- [iter9 — rich edit report + # comment support (DeepSeek flash low, blind)](docs/benchmarks/iter9.md)
 
 See [MIGRATION_PLAN.md](MIGRATION_PLAN.md) for the staged implementation and
 cutover gates.
