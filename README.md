@@ -53,6 +53,45 @@ the model sees a first-class function schema instead of prose instructions
 about a CLI, and `peek` (read-only, selector-scoped region reads through the
 same grammar).
 
+## Quick install
+
+Build and register on the stock-Codex surface:
+
+```bash
+cargo build --release
+ln -sf "$PWD/target/release/apx" ~/.local/bin/apx
+ln -sf "$PWD/target/release/apx-mcp" ~/.local/bin/apx-mcp
+```
+
+```toml
+# ~/.codex/config.toml
+[mcp_servers.apx]
+command = "/Users/<you>/.local/bin/apx-mcp"
+cwd = "/path/to/apx-rust"
+startup_timeout_sec = 30.0
+```
+
+To steer your agents to `apx` instead of `apply_patch`, paste the ready block
+from [docs/codex-agent-install.md](docs/codex-agent-install.md) into
+`~/.codex/AGENTS.md`.
+
+## Benchmarks vs apply_patch
+
+Blind harness, deepseek-v4-flash low, 2x2 grid, same fixtures for both tools
+(self-run, not third-party; protocol in the linked reports):
+
+| Metric | apx (iter9) | apply_patch (iter5 control) |
+|---|---|---|
+| Raw accuracy | 64/66 | 60/66 |
+| Adjusted functional accuracy | 100% (A6 task-bound only) | 100% (A6 + measurement artifacts) |
+| Session input tokens, avg | 1,410,147 | 1,352,034 |
+| Edit invocations, avg | 1.75 | 3.5 |
+| Edit payload (chars), avg | 9,105 | 8,685 |
+| Output tokens, avg | 24,807 | 13,667 |
+| Rejections | 1/4 (root-caused, fixed) | 0/4 |
+| Atomicity | reject = zero changes applied | partial-apply risk on failure |
+
+
 ## Benchmarks
 
 
