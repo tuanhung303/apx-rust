@@ -784,7 +784,7 @@ fn go_quote_char_byte(byte: u8) -> String {
     format!("'{body}'")
 }
 
-fn clean_path(path: &str) -> String {
+pub fn clean_path(path: &str) -> String {
     // Mirrors Go's filepath.Clean (frozen oracle): `..` may pop only segments
     // past the leading root, or past an already-appended leading `..` prefix.
     let rooted = path.starts_with('/');

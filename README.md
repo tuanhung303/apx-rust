@@ -28,6 +28,10 @@ request, launchd service, systemd service, or provider `base_url` override.
 The existing Go repository remains the behavioral oracle until differential
 tests, failure atomicity, diagnostics, and Codex end-to-end gates pass.
 
+## Benchmarks
+
+- [iter4 — Rust CLI vs apply_patch (DeepSeek flash low, blind)](docs/benchmarks/iter4.md)
+
 See [MIGRATION_PLAN.md](MIGRATION_PLAN.md) for the staged implementation and
 cutover gates.
 
@@ -41,4 +45,3 @@ cutover gates.
 No Rust crate is scaffolded until the Phase 0 contract fixtures are generated
 from the Go implementation. This prevents a new implementation from silently
 becoming its own specification.
-
