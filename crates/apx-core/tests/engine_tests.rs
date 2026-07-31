@@ -140,3 +140,27 @@ fn peek_rejects_edit_commands_and_missing_files() {
     let error = apx_core::evaluate_peek(&files, &program).unwrap_err();
     assert!(error.message.contains("does not exist"));
 }
+
+#[test]
+fn rm_then_new_replaces_a_baseline_file_in_one_script() {
+    let files = baseline(&[("events.py", "old content\n")]);
+    let program = parse("in events.py\nrm\nnew events.py\ntype \"fresh content\\n\"\n").unwrap();
+    let result = evaluate(&files, &program).unwrap();
+    let kinds: Vec<_> = result
+        .changes
+        .changes
+        .iter()
+        .map(|change| change.kind.clone())
+        .collect();
+    assert_eq!(kinds, vec![ChangeKind::Delete, ChangeKind::Add]);
+    assert_eq!(result.changes.changes[1].content, "fresh content\n");
+}
+
+#[test]
+fn new_still_rejects_an_untouched_baseline_destination() {
+    let files = baseline(&[("events.py", "old content\n")]);
+    let program = parse("new events.py\ntype \"fresh content\\n\"\n").unwrap();
+    let error = evaluate(&files, &program).unwrap_err();
+    assert!(error.message.contains("already exists"));
+    assert!(error.message.contains("rm it first"));
+}

@@ -343,6 +343,12 @@ Gate:
 This path is the interim surface until Phase 6 lands: it pays a per-call
 process boundary and is superseded by the in-process freeform extension.
 
+Status (iter7, 2026-08-01): accuracy parity 60/66 across seven arms; desc v4
+at 687 chars with a worked example removed the discovery phase; `rm` + `new`
+whole-file replacement now works in one script (see docs/benchmarks/iter7.md).
+`--tool-help` reads 1/4; peek adoption 0/4 (known non-mover).
+process boundary and is superseded by the in-process freeform extension.
+
 ### Phase 6: Add serverless Codex MVP
 
 

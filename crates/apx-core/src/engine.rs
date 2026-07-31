@@ -229,14 +229,19 @@ impl<B: Baseline> Workspace<'_, B> {
     }
 
     fn ensure_free(&self, path: &str) -> Result<(), String> {
-        if self.paths.contains_key(path)
-            || self.reserved.contains(path)
-            || self.baseline.exists(path)?
-        {
-            Err(format!("destination {path} already exists"))
-        } else {
-            Ok(())
+        if self.paths.contains_key(path) {
+            return Err(format!("destination {path} already exists"));
         }
+        let freed = self
+            .files
+            .iter()
+            .any(|file| file.deleted && file.path == path && !file.created);
+        if !freed && (self.reserved.contains(path) || self.baseline.exists(path)?) {
+            return Err(format!(
+                "destination {path} already exists; rm it first in this script to replace"
+            ));
+        }
+        Ok(())
     }
 
     fn changes(&self) -> ChangeSet {
