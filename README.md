@@ -75,12 +75,12 @@ To steer your agents to `apx` instead of `apply_patch`, paste the ready block
 from [docs/codex-agent-install.md](docs/codex-agent-install.md) into
 `~/.codex/AGENTS.md`.
 
-## Benchmarks vs apply_patch
+## Benchmarks vs apply_patch (current)
 
 Blind harness, deepseek-v4-flash low, 2x2 grid, same fixtures for both tools
-(self-run, not third-party; protocol in the linked reports):
+(self-run, not third-party; latest run: iter9):
 
-| Metric | apx (iter9) | apply_patch (iter5 control) |
+| Metric | apx (current) | apply_patch (control) |
 |---|---|---|
 | Raw accuracy | 64/66 | 60/66 |
 | Adjusted functional accuracy | 100% (A6 task-bound only) | 100% (A6 + measurement artifacts) |
@@ -92,14 +92,8 @@ Blind harness, deepseek-v4-flash low, 2x2 grid, same fixtures for both tools
 | Atomicity | reject = zero changes applied | partial-apply risk on failure |
 
 
-## Benchmarks
+## Latest report
 
-
-- [iter4 — Rust CLI vs apply_patch (DeepSeek flash low, blind)](docs/benchmarks/iter4.md)
-- [iter5 — apx as a registered MCP tool vs apply_patch (DeepSeek flash low, blind)](docs/benchmarks/iter5.md)
-- [iter6 — desc v3 (K3-tuned) + peek tool (DeepSeek flash low, blind)](docs/benchmarks/iter6.md)
-- [iter7 — desc v4 (worked example) + peek steering (DeepSeek flash low, blind)](docs/benchmarks/iter7.md)
-- [iter8 — rm+new one-script replacement; convergence (DeepSeek flash low, blind)](docs/benchmarks/iter8.md)
 - [iter9 — rich edit report + # comment support (DeepSeek flash low, blind)](docs/benchmarks/iter9.md)
 
 See [MIGRATION_PLAN.md](MIGRATION_PLAN.md) for the staged implementation and
