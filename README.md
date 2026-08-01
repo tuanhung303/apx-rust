@@ -101,6 +101,7 @@ changes applied; apply_patch has partial-apply risk on failure.
 
 ## Latest report
 
+- [iter19 — unprefixed MCP names (apx__apx at position 2): still apply_patch (blind, luna low, 2x1)](docs/benchmarks/iter19.md)
 - [iter18 — luna MEDIUM: effort is not the gate either (blind, 2x1)](docs/benchmarks/iter18.md)
 - [iter17 — BANNED-claim desc + inputSchema hint: third luna-low negative (blind, 2x1)](docs/benchmarks/iter17.md)
 - [iter16 — desc front-loading + exact tool-name hint: still no luna-low adoption (blind, 2x1)](docs/benchmarks/iter16.md)
