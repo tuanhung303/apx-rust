@@ -124,3 +124,31 @@ OpenAI models. Portability therefore cannot be achieved server-side alone;
 remaining options are client-side (interceptor/wrapper that rewrites
 apply_patch into apx scripts) or instructions outside the tool desc
 (AGENTS.md — proven iter13, but violates the hard desc-only rule).
+
+## Root cause, closed (same day): the apply_patch mandate is in the MODEL's base instructions
+
+`models_cache.json` in the harness CODEX_HOME (source of each model's
+`base_instructions`, delivered verbatim as the system prompt) contains for
+the OpenAI entries:
+
+> "Always use apply_patch for manual code edits. Do not use cat or any other
+> commands when creating or editing files. Formatting commands or bulk edits
+> don't need to be done with apply_patch."
+
+The same sentence is embedded in the codex binary's default instructions
+template (verified via `strings`). A tool description is advisory relative
+to a direct system instruction, so no desc wording/naming/position can
+reliably win — which is exactly what iter15-19 observed (luna follows the
+base instruction; deepseek's provider catalog has no such mandate and
+converts, iter14). The model catalog has `experimental_supported_tools` /
+`tool_mode` fields, but they exist only in remote ModelInfo, are NOT
+config-overridable (`[models."..."]` is rejected by `--strict-config`), and
+are absent from the local cache. The only ways to remove the mandate are
+system-prompt-level (edit AGENTS.md / `model_instructions_file` / the cache
+itself) or client-side (interceptor) — both outside the hard desc-only rule.
+
+**Portability verdict (final):** desc-only steering is proven sufficient for
+deepseek-v4-flash low (iter14: 7+11 apx/peek calls, 0 apply_patch) and proven
+impossible for stock OpenAI models on codex v0.146.0 across the full surface:
+6 benchmark iterations (iter14-19), every config variant under
+`--strict-config`, binary schema strings, and the local model catalog.
