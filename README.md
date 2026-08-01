@@ -77,19 +77,26 @@ from [docs/codex-agent-install.md](docs/codex-agent-install.md) into
 
 ## Benchmarks vs apply_patch (current)
 
-Blind harness, deepseek-v4-flash low, 2x2 grid, same fixtures for both tools
-(self-run, not third-party; latest run: iter9):
+Blind harness, deepseek-v4-flash low, 2x2 grid, same exercises for both tools
+(self-run, not third-party; latest run: iter9). A = Go lease registry, B = Python
+ledger. All token/payload rows are per-session sums, not averages.
 
-| Metric | apx (current) | apply_patch (control) |
-|---|---|---|
-| Raw accuracy | 64/66 | 60/66 |
-| Adjusted functional accuracy | 100% (A6 task-bound only) | 100% (A6 + measurement artifacts) |
-| Session input tokens, avg | 1,410,147 | 1,352,034 |
-| Edit invocations, avg | 1.75 | 3.5 |
-| Edit payload (chars), avg | 9,105 | 8,685 |
-| Output tokens, avg | 24,807 | 13,667 |
-| Rejections | 1/4 (root-caused, fixed) | 0/4 |
-| Atomicity | reject = zero changes applied | partial-apply risk on failure |
+| Session | Tool | Input tokens | Output tokens | Edit calls | Edit payload (chars) |
+|---|---|---|---|---|---|
+| A1 | apx | 1,784,577 | 23,063 | 2 | 6,761 |
+| A1 | apply_patch | 1,264,009 | 12,243 | 3 | 8,423 |
+| A2 | apx | 1,215,091 | 18,449 | 1 | 5,877 |
+| A2 | apply_patch | 1,995,796 | 23,213 | 7 | 7,450 |
+| B1 | apx | 969,500 | 20,654 | 1 | 7,166 |
+| B1 | apply_patch | 1,026,113 | 11,270 | 2 | 11,637 |
+| B2 | apx | 1,671,419 | 37,063 | 3 | 16,617 |
+| B2 | apply_patch | 1,122,218 | 7,940 | 2 | 7,230 |
+| **Total** | **apx** | **5,640,587** | 99,229 | **7** | 36,421 |
+| **Total** | **apply_patch** | **5,408,136** | 54,666 | **14** | 34,740 |
+
+Raw accuracy: apx 64/66, apply_patch 60/66 (both 100% functional — the only miss is
+the task-bound A6 check neither exercise requests). Atomicity: apx reject = zero
+changes applied; apply_patch has partial-apply risk on failure.
 
 
 ## Latest report
