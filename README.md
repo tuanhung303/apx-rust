@@ -78,20 +78,20 @@ from [docs/codex-agent-install.md](docs/codex-agent-install.md) into
 ## Benchmarks vs apply_patch (current)
 
 Blind harness, deepseek-v4-flash low, 2x2 grid, same exercises for both tools
-(self-run, not third-party; latest run: iter9). A = Go lease registry, B = Python
+(self-run, not third-party; latest run: iter10). A = Go lease registry, B = Python
 ledger. All token/payload rows are per-session sums, not averages.
 
 | Session | Tool | Input tokens | Output tokens | Edit calls | Edit payload (chars) |
 |---|---|---|---|---|---|
-| A1 | apx | 1,784,577 | 23,063 | 2 | 6,761 |
+| A1 | apx (iter10) | 872,030 | 20,180 | 1 | 7,186 |
 | A1 | apply_patch | 1,264,009 | 12,243 | 3 | 8,423 |
-| A2 | apx | 1,215,091 | 18,449 | 1 | 5,877 |
+| A2 | apx (iter10) | 1,720,897 | 28,055 | 2 | 7,532 |
 | A2 | apply_patch | 1,995,796 | 23,213 | 7 | 7,450 |
-| B1 | apx | 969,500 | 20,654 | 1 | 7,166 |
+| B1 | apx (iter10) | 1,622,459 | 19,728 | 2 | 7,476 |
 | B1 | apply_patch | 1,026,113 | 11,270 | 2 | 11,637 |
-| B2 | apx | 1,671,419 | 37,063 | 3 | 16,617 |
+| B2 | apx (iter10) | 982,151 | 11,100 | 1 | 7,457 |
 | B2 | apply_patch | 1,122,218 | 7,940 | 2 | 7,230 |
-| **Total** | **apx** | **5,640,587** | 99,229 | **7** | 36,421 |
+| **Total** | **apx (iter10)** | **5,197,537** | 79,063 | **6** | 29,651 |
 | **Total** | **apply_patch** | **5,408,136** | 54,666 | **14** | 34,740 |
 
 Raw accuracy: apx 64/66, apply_patch 60/66 (both 100% functional — the only miss is
@@ -101,7 +101,9 @@ changes applied; apply_patch has partial-apply risk on failure.
 
 ## Latest report
 
+- [iter10 — tighter report caps + closest-line hint (DeepSeek flash low, blind)](docs/benchmarks/iter10.md)
 - [iter9 — rich edit report + # comment support (DeepSeek flash low, blind)](docs/benchmarks/iter9.md)
+
 
 See [MIGRATION_PLAN.md](MIGRATION_PLAN.md) for the staged implementation and
 cutover gates.
