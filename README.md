@@ -55,6 +55,26 @@ same grammar).
 
 ## Quick install
 
+### One-liner (from GitHub)
+
+Requires a Rust toolchain (MSRV 1.95+). Clones into `~/src/apx-rust`, builds
+release binaries, symlinks `apx` + `apx-mcp` into `~/.local/bin`, and
+registers the MCP server with Hermes if `hermes` is on PATH:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tuanhung303/apx-rust/main/scripts/install.sh | bash
+```
+
+Overrides: `APX_SRC_DIR`, `APX_BIN_DIR`, `APX_SKIP_MCP=1`. To verify:
+
+```bash
+hermes mcp list && hermes mcp test apx
+```
+
+Restart Hermes so the `mcp_apx_apx` / `mcp_apx_peek` tools load.
+
+### Manual build
+
 Build and register on the stock-Codex surface:
 
 ```bash
