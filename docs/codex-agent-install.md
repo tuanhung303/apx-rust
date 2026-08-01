@@ -39,8 +39,11 @@ self-provision it.
   unselectable until `commit`.
 - Failure diagnostics are self-describing: `command N, source line N,
   operation, category: message; in PATH` + `no changes applied (atomic)`.
-- Evidence: https://github.com/tuanhung303/apx-rust — docs/benchmarks/iter5.md
-  (head-to-head vs apply_patch), docs/benchmarks/iter9.md (latest).
+- Evidence: https://github.com/tuanhung303/apx-rust — docs/benchmarks/iter10.md
+  (head-to-head vs apply_patch, latest), docs/benchmarks/iter19.md
+  (portability verdict: desc-only converts DeepSeek agents; stock OpenAI
+  models need this block — tool descriptions cannot override their built-in
+  apply_patch mandate).
 ```
 
 ## Applying it

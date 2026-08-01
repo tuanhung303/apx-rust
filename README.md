@@ -75,6 +75,12 @@ To steer your agents to `apx` instead of `apply_patch`, paste the ready block
 from [docs/codex-agent-install.md](docs/codex-agent-install.md) into
 `~/.codex/AGENTS.md`.
 
+Portability verdict (2026-08-01, iter19): tool-description-only steering
+converts DeepSeek agents but **not** stock OpenAI models — their base
+instructions mandate `apply_patch`, which no description can reliably
+override. For OpenAI models this AGENTS.md block is the proven path; see
+[docs/benchmarks/iter19.md](docs/benchmarks/iter19.md).
+
 ## Benchmarks vs apply_patch (current)
 
 Blind harness, deepseek-v4-flash low, 2x2 grid, same exercises for both tools
