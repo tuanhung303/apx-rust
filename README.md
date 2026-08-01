@@ -101,7 +101,7 @@ changes applied; apply_patch has partial-apply risk on failure.
 
 ## Latest report
 
-- [iter10 — tighter report caps + closest-line hint (DeepSeek flash low, blind)](docs/benchmarks/iter10.md)
+- [iter11 — tool-description tuning: worked example + peek-first (DeepSeek flash low, blind, 2x1)](docs/benchmarks/iter11.md)
 - [iter9 — rich edit report + # comment support (DeepSeek flash low, blind)](docs/benchmarks/iter9.md)
 
 
