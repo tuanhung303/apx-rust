@@ -100,3 +100,27 @@ require instructions outside the tool description (AGENTS.md /
 `model_instructions_file`, proven in iter13), or a client-side interceptor
 that removes/hides the builtin `apply_patch` — none exists in stock codex
 v0.146.0 (verified via `--strict-config` probes and binary schema strings).
+
+## Final probe (same day, after iter19): `tools.enabled_tools` whitelist
+
+The last server-side candidate for hiding the builtin was a top-level
+`[tools]` whitelist:
+
+```
+codex exec --strict-config -c 'tools={enabled_tools=["exec_command"]}' "say ok"
+→ Error loading config.toml: unknown configuration field `tools.enabled_tools` in -c/--config override
+```
+
+`strings` on the real binary settles why: `enabled_tools` / `disabled_tools`
+are fields of **PluginMcpServerConfig** (per-MCP-server tool filtering, e.g.
+`[mcp_servers.apx] enabled_tools = [...]`), not a global `[tools]` table.
+Every `tools.*` variant under `--strict-config` is rejected (mode/v2/enabled/
+freeform/allow/deny/only/...), and `tool_suggest.disabled_tools` is
+suggestion-only for `connector|plugin` types.
+
+**Definitive negative, full surface exhausted:** stock codex v0.146.0 ships no
+configuration that removes, hides, or demotes the builtin `apply_patch` for
+OpenAI models. Portability therefore cannot be achieved server-side alone;
+remaining options are client-side (interceptor/wrapper that rewrites
+apply_patch into apx scripts) or instructions outside the tool desc
+(AGENTS.md — proven iter13, but violates the hard desc-only rule).
