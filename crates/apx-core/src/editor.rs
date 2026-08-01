@@ -99,8 +99,21 @@ impl Editor {
         })?;
         let offsets = non_overlapping_offsets(&self.baseline[start..], text, count);
         if offsets.len() != count {
+            let from = match offsets.last() {
+                Some(last) => lines.partition_point(|item| item.0 < start + last + text.len()),
+                None => line - 1,
+            };
+            let hint = closest_line_hint(&lines, &self.baseline, text, from, lines.len())
+                .or_else(|| {
+                    if offsets.is_empty() && line > 1 {
+                        closest_line_hint(&lines, &self.baseline, text, 0, line - 1)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
             return Err(format!(
-                "found {} of {count} requested matches of {text:?} at or after line {line}; file has {} lines",
+                "found {} of {count} requested matches of {text:?} at or after line {line}; file has {} lines{hint}",
                 offsets.len(),
                 visible
             ));
@@ -124,8 +137,15 @@ impl Editor {
             .map(|item| item.0)
             .collect();
         if starts.len() != 1 {
+            let hint = if starts.is_empty() {
+                let lines = logical_lines(&self.baseline);
+                closest_line_hint(&lines, &self.baseline, start, 0, lines.len())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
             return Err(format!(
-                "start literal {start:?} occurs {} times in the active file baseline; want exactly once",
+                "start literal {start:?} occurs {} times in the active file baseline; want exactly once{hint}",
                 starts.len()
             ));
         }
@@ -136,8 +156,16 @@ impl Editor {
             .map(|item| item.0)
             .collect();
         if ends.len() != 1 {
+            let hint = if ends.is_empty() {
+                let lines = logical_lines(&self.baseline);
+                let from = lines.partition_point(|item| item.2 <= tail);
+                closest_line_hint(&lines, &self.baseline, end, from, lines.len())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
             return Err(format!(
-                "end literal {end:?} occurs {} times after start in the active file baseline; want exactly once",
+                "end literal {end:?} occurs {} times after start in the active file baseline; want exactly once{hint}",
                 ends.len()
             ));
         }
@@ -382,6 +410,74 @@ fn non_overlapping_offsets(text: &str, literal: &str, limit: usize) -> Vec<usize
     result
 }
 
+/// Maximum candidate lines scanned per closest-match hint search.
+const HINT_CANDIDATE_LINES: usize = 400;
+/// Minimum bigram similarity for a hint to be shown; below this it is noise.
+const HINT_MIN_SIMILARITY: f64 = 0.5;
+/// Maximum snippet characters quoted in a hint.
+const HINT_SNIPPET_CHARS: usize = 80;
+
+/// Best fuzzy candidate line for a missed anchor, as a message suffix like
+/// `; closest line K: "snippet"`. Compares whole logical lines in
+/// `lines[from..to]` (at most HINT_CANDIDATE_LINES of them) against the needle
+/// using a character-bigram Dice ratio, so near-miss anchors and
+/// substring-shaped anchors both surface; unrelated files yield no hint.
+fn closest_line_hint(
+    lines: &[(usize, usize, usize)],
+    baseline: &str,
+    needle: &str,
+    from: usize,
+    to: usize,
+) -> Option<String> {
+    if needle.chars().count() < 2 {
+        return None;
+    }
+    let to = to.min(from.saturating_add(HINT_CANDIDATE_LINES)).min(lines.len());
+    let mut best: Option<(f64, usize)> = None;
+    for index in from..to {
+        let text = &baseline[lines[index].0..lines[index].1];
+        if text.is_empty() {
+            continue;
+        }
+        let score = bigram_similarity(needle, text);
+        if score >= HINT_MIN_SIMILARITY && best.is_none_or(|(current, _)| score > current) {
+            best = Some((score, index));
+        }
+    }
+    let (_, index) = best?;
+    let text = &baseline[lines[index].0..lines[index].1];
+    let mut snippet: String = text.chars().take(HINT_SNIPPET_CHARS).collect();
+    if text.chars().count() > HINT_SNIPPET_CHARS {
+        snippet.push('…');
+    }
+    Some(format!("; closest line {}: {snippet:?}", index + 1))
+}
+
+/// Character-bigram Dice similarity in [0, 1]; 1.0 for identical strings.
+/// Unicode-safe (operates on chars) and O(n) in the compared lengths.
+fn bigram_similarity(needle: &str, line: &str) -> f64 {
+    let needle_chars: Vec<char> = needle.chars().take(HINT_SNIPPET_CHARS + 1).collect();
+    let line_chars: Vec<char> = line.chars().take(HINT_SNIPPET_CHARS + 1).collect();
+    if needle_chars.len() < 2 || line_chars.len() < 2 {
+        return usize::from(needle_chars == line_chars) as f64;
+    }
+    let mut counts: std::collections::HashMap<(char, char), usize> =
+        std::collections::HashMap::new();
+    for pair in needle_chars.windows(2) {
+        *counts.entry((pair[0], pair[1])).or_default() += 1;
+    }
+    let mut shared = 0usize;
+    for pair in line_chars.windows(2) {
+        if let Some(count) = counts.get_mut(&(pair[0], pair[1])) {
+            if *count > 0 {
+                *count -= 1;
+                shared += 1;
+            }
+        }
+    }
+    2.0 * shared as f64 / (needle_chars.len() + line_chars.len() - 2) as f64
+}
+
 fn line_terminator(text: &str) -> &str {
     if text.contains("\r\n") {
         "\r\n"
@@ -398,4 +494,82 @@ fn starts_with_terminator(text: &str) -> bool {
 
 fn ends_with_terminator(text: &str) -> bool {
     text.ends_with('\n') || text.ends_with('\r')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tsel_miss_reports_closest_line() {
+        let mut editor = Editor::new("fn handleRequst(ctx) {\n}\n".to_owned());
+        let error = editor
+            .select_matches(1, "handleRequest", 1)
+            .expect_err("tsel must miss");
+        assert!(
+            error.contains("found 0 of 1 requested matches"),
+            "{error}"
+        );
+        assert!(
+            error.contains("; closest line 1: \"fn handleRequst(ctx) {\""),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn tsel_far_apart_text_yields_no_hint() {
+        let mut editor = Editor::new("alpha\nbeta\ngamma\n".to_owned());
+        let error = editor
+            .select_matches(1, "zzqqxxyy nonsense", 1)
+            .expect_err("tsel must miss");
+        assert!(!error.contains("closest line"), "{error}");
+    }
+
+    #[test]
+    fn tsel_unicode_emoji_lines_still_hint() {
+        let mut editor = Editor::new("let emoji = \"\u{1F680}\u{1F389} launch\";\nlet other = 1;\n".to_owned());
+        let error = editor
+            .select_matches(1, "let emoji = \"\u{1F680} launch\";", 1)
+            .expect_err("tsel must miss");
+        assert!(
+            error.contains("; closest line 1: \"let emoji = \\\"\u{1F680}\u{1F389} launch\\\";\""),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn tsel_partial_match_hints_at_remainder() {
+        let mut editor = Editor::new("alpha beta\nalpha bet\n".to_owned());
+        let error = editor
+            .select_matches(1, "alpha beta", 2)
+            .expect_err("tsel must miss");
+        assert!(
+            error.contains("found 1 of 2 requested matches"),
+            "{error}"
+        );
+        assert!(error.contains("; closest line 2: \"alpha bet\""), "{error}");
+    }
+
+    #[test]
+    fn bsel_missing_start_reports_closest_line() {
+        let mut editor = Editor::new("fn main() -> Result<()> {\n}\n".to_owned());
+        let error = editor
+            .select_block("fn main() {", "}")
+            .expect_err("bsel must miss");
+        assert!(error.contains("occurs 0 times"), "{error}");
+        assert!(
+            error.contains("; closest line 1: \"fn main() -> Result<()> {\""),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn bsel_missing_end_reports_closest_line_after_start() {
+        let mut editor = Editor::new("START\nkeep\ngoin\n".to_owned());
+        let error = editor
+            .select_block("START", "going")
+            .expect_err("bsel must miss");
+        assert!(error.contains("occurs 0 times"), "{error}");
+        assert!(error.contains("; closest line 3: \"goin\""), "{error}");
+    }
 }

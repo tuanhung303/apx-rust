@@ -392,13 +392,13 @@ impl<B: Baseline> Workspace<'_, B> {
 }
 
 /// Maximum preview lines per changed file.
-const REPORT_PREVIEW_LINES: usize = 60;
+const REPORT_PREVIEW_LINES: usize = 24;
 /// Maximum length of one previewed line; longer lines are truncated with a marker.
 const REPORT_LINE_CAP: usize = 160;
 /// Maximum preview bytes per changed file.
-const REPORT_PREVIEW_BYTES: usize = 4096;
+const REPORT_PREVIEW_BYTES: usize = 2048;
 /// Maximum total report size; the preview is cut first.
-const REPORT_TOTAL_BYTES: usize = 8192;
+const REPORT_TOTAL_BYTES: usize = 4096;
 
 fn line_label(count: usize) -> String {
     format!("{} line{}", count, if count == 1 { "" } else { "s" })
@@ -679,7 +679,7 @@ mod tests {
         assert!(report.contains("- line 1"), "{report}");
         assert!(report.contains("+ LINE 1"), "{report}");
         assert!(
-            report.contains("... 80 more changed lines omitted"),
+            report.contains("... 116 more changed lines omitted"),
             "{report}"
         );
     }
