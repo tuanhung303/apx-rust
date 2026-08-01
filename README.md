@@ -101,6 +101,7 @@ changes applied; apply_patch has partial-apply risk on failure.
 
 ## Latest report
 
+- [iter18 — luna MEDIUM: effort is not the gate either (blind, 2x1)](docs/benchmarks/iter18.md)
 - [iter17 — BANNED-claim desc + inputSchema hint: third luna-low negative (blind, 2x1)](docs/benchmarks/iter17.md)
 - [iter16 — desc front-loading + exact tool-name hint: still no luna-low adoption (blind, 2x1)](docs/benchmarks/iter16.md)
 - [iter15 — luna low vs deepseek low token cost; desc-only steering did NOT convert luna (blind, 2x1)](docs/benchmarks/iter15.md)
