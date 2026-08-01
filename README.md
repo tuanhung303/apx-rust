@@ -101,7 +101,7 @@ changes applied; apply_patch has partial-apply risk on failure.
 
 ## Latest report
 
-- [iter12 — read-hygiene steering: priority tiers apx > peek > cat/nl (DeepSeek flash low, blind, 2x1)](docs/benchmarks/iter12.md)
+- [iter13-14 — steering in tool descriptions, zero-instructions harness (DeepSeek flash low, blind, 2x1)](docs/benchmarks/iter13.md)
 - [iter9 — rich edit report + # comment support (DeepSeek flash low, blind)](docs/benchmarks/iter9.md)
 
 
