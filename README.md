@@ -101,6 +101,7 @@ changes applied; apply_patch has partial-apply risk on failure.
 
 ## Latest report
 
+- [iter16 — desc front-loading + exact tool-name hint: still no luna-low adoption (blind, 2x1)](docs/benchmarks/iter16.md)
 - [iter15 — luna low vs deepseek low token cost; desc-only steering did NOT convert luna (blind, 2x1)](docs/benchmarks/iter15.md)
 - [iter13-14 — steering in tool descriptions, zero-instructions harness (DeepSeek flash low, blind, 2x1)](docs/benchmarks/iter13.md)
 - [iter9 — rich edit report + # comment support (DeepSeek flash low, blind)](docs/benchmarks/iter9.md)
