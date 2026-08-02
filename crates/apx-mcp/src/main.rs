@@ -111,7 +111,7 @@ fn tools_list() -> Value {
     json!({
         "tools": [
             {
-                "name": "apx",
+                "name": "px",
                 "description": APX_MCP_DESCRIPTION,
                 "inputSchema": {
                     "type": "object",
@@ -169,7 +169,7 @@ fn tools_call(params: Option<&Value>, root_default: &Path) -> Result<Value, (i64
         None => None,
     };
     let (text, success) = match name {
-        "apx" => run_script(script, root.as_deref(), cwd.as_deref()),
+        "px" => run_script(script, root.as_deref(), cwd.as_deref()),
         "peek" => run_peek_script(script, root.as_deref(), cwd.as_deref()),
         _ => return Err((-32602, "unknown tool")),
     };
@@ -353,7 +353,7 @@ mod tests {
         let tools = value["result"]["tools"].as_array().expect("tools array");
         assert_eq!(tools.len(), 2);
         let tool = &tools[0];
-        assert_eq!(tool["name"], "apx");
+        assert_eq!(tool["name"], "px");
         assert_eq!(tool["description"], APX_MCP_DESCRIPTION);
         assert_eq!(tool["inputSchema"]["required"], json!(["script"]));
         assert_eq!(
@@ -472,7 +472,7 @@ mod tests {
             "id": 9,
             "method": "tools/call",
             "params": {
-                "name": "apx",
+                "name": "px",
                 "arguments": {
                     "script": "in a.txt\ntsel 1 \"one\"\ntype \"ONE\"\n",
                     "root": dir.to_str().unwrap()
@@ -493,7 +493,7 @@ mod tests {
     #[test]
     fn tools_call_missing_script_is_invalid_params() {
         let response = handle_line(
-            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"apx","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"px","arguments":{}}}"#,
             Path::new("."),
         )
         .expect("tools/call must produce a response");
