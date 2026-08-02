@@ -47,11 +47,13 @@ apx-core + apx-local (in-process)
 workspace files
 ```
 
-`apx-mcp` exposes two tools through a registered MCP server: `apx` (apply) with
+`apx-mcp` exposes two tools through a registered MCP server: `px` (apply) with
 a diff-only description ("like apply_patch, but takes an APX diff script"), so
 the model sees a first-class function schema instead of prose instructions
 about a CLI, and `peek` (read-only, selector-scoped region reads through the
-same grammar).
+same grammar). On Hermes the server registers as `a`, so the tools appear as
+`mcp_a_px` / `mcp_a_peek`; on Codex the server is `apx`, so they appear as
+`apx__apx` / `apx__peek`.
 
 ## Quick install
 
@@ -71,7 +73,7 @@ Overrides: `APX_SRC_DIR`, `APX_BIN_DIR`, `APX_SKIP_MCP=1`. To verify:
 hermes mcp list && hermes mcp test apx
 ```
 
-Restart Hermes so the `mcp_apx_apx` / `mcp_apx_peek` tools load.
+Restart Hermes so the `mcp_a_px` / `mcp_a_peek` tools load.
 
 ### Manual build
 
