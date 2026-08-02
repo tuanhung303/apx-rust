@@ -93,15 +93,16 @@ cwd = "/path/to/apx-rust"
 startup_timeout_sec = 30.0
 ```
 
-To steer your agents to `apx` instead of `apply_patch`, paste the ready block
-from [docs/codex-agent-install.md](docs/codex-agent-install.md) into
-`~/.codex/AGENTS.md`.
+To steer your agents to `apx` instead of `apply_patch`:
+- **Hermes**: paste the block from [docs/hermes-agent-install.md](docs/hermes-agent-install.md) into memory — proven with Luna medium (iter20).
+- **Codex**: paste the ready block from [docs/codex-agent-install.md](docs/codex-agent-install.md) into `~/.codex/AGENTS.md`.
 
-Portability verdict (2026-08-01, iter19): tool-description-only steering
+Portability verdict (2026-08-02, iter20): tool-description-only steering
 converts DeepSeek agents but **not** stock OpenAI models — their base
 instructions mandate `apply_patch`, which no description can reliably
-override. For OpenAI models this AGENTS.md block is the proven path; see
-[docs/benchmarks/iter19.md](docs/benchmarks/iter19.md).
+override. Instruction-level steering (AGENTS.md block for Codex, memory block
+for Hermes) converts both: iter13 proved it for Codex, iter20 proved it for
+Hermes (Luna medium, full hard set, zero misses).
 
 ## Benchmarks vs apply_patch (current)
 
@@ -129,6 +130,7 @@ changes applied; apply_patch has partial-apply risk on failure.
 
 ## Latest report
 
+- [iter20 — Hermes memory steering converts Luna medium: full hard set, zero misses (swarm, blind, 2x1)](docs/benchmarks/iter20.md)
 - [iter19 — unprefixed MCP names (apx__apx at position 2): still apply_patch (blind, luna low, 2x1)](docs/benchmarks/iter19.md)
 - [iter18 — luna MEDIUM: effort is not the gate either (blind, 2x1)](docs/benchmarks/iter18.md)
 - [iter17 — BANNED-claim desc + inputSchema hint: third luna-low negative (blind, 2x1)](docs/benchmarks/iter17.md)
